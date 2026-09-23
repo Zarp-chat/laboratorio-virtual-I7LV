@@ -1,0 +1,6 @@
+# Carpetas que NetBeans genera al compilar
+build/
+dist/
+
+# Configuración personal de cada computador
+nbproject/private/

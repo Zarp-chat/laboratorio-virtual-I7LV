@@ -1,20 +1,29 @@
-/*
- * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
- * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Main.java to edit this template
- */
 package laboratoriovirtual;
 
+import javax.swing.SwingUtilities;
+import laboratoriovirtual.gui.Tema;
+import laboratoriovirtual.gui.VentanaPrincipal;
+
 /**
- *
- * @author TORRE
+ * Punto de arranque del laboratorio virtual.
  */
 public class Main {
 
     /**
-     * @param args the command line arguments
+     * @param args no se usan
      */
     public static void main(String[] args) {
-        // TODO code application logic here
+        // Swing solo se debe tocar desde su propio hilo (Event Dispatch Thread)
+        SwingUtilities.invokeLater(() -> {
+            Tema.aplicar();
+
+            // En las tareas siguientes aquí se crearán la fuente de datos
+            // (FuenteAleatoria; en el Laboratorio 2, FuenteSerial), el Muestreador
+            // y los controladores que conectan la ventana con ellos.
+
+            VentanaPrincipal ventana = new VentanaPrincipal();
+            ventana.setLocationRelativeTo(null); // centrada en la pantalla
+            ventana.setVisible(true);
+        });
     }
-    
 }

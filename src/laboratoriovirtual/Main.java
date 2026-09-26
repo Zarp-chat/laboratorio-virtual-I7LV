@@ -1,28 +1,50 @@
 package laboratoriovirtual;
 
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import javax.swing.SwingUtilities;
+import laboratoriovirtual.control.ControlMuestreo;
+import laboratoriovirtual.datos.FuenteAleatoria;
+import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.gui.Tema;
 import laboratoriovirtual.gui.VentanaPrincipal;
+import laboratoriovirtual.muestreo.Muestreador;
 
 /**
- * Punto de arranque del laboratorio virtual.
+ * Punto de arranque del programa: crea las piezas y las conecta.
  */
 public class Main {
 
-    /**
-     * @param args no se usan
-     */
+    /** Tiempo de muestreo con el que arranca el programa. */
+    private static final int PERIODO_INICIAL_MS = 500;
+
     public static void main(String[] args) {
-        // Swing solo se debe tocar desde su propio hilo (Event Dispatch Thread)
         SwingUtilities.invokeLater(() -> {
             Tema.aplicar();
 
-            // En las tareas siguientes aquí se crearán la fuente de datos
-            // (FuenteAleatoria; en el Laboratorio 2, FuenteSerial), el Muestreador
-            // y los controladores que conectan la ventana con ellos.
+            // ÚNICO lugar donde se elige la fuente de datos.
+            // En el Laboratorio 2 esta línea pasa a ser: new FuenteSerial(...)
+            FuenteDeDatos fuente = new FuenteAleatoria();
+            Muestreador muestreador = new Muestreador(fuente, PERIODO_INICIAL_MS);
 
             VentanaPrincipal ventana = new VentanaPrincipal();
-            ventana.setLocationRelativeTo(null); // centrada en la pantalla
+
+            // Controladores: cada uno maneja una parte de la ventana.
+            // En tareas siguientes se agregan aquí ControlSalidas,
+            // las gráficas y ControlGuardado.
+            new ControlMuestreo(muestreador, ventana.getBarraEstado(),
+                    ventana.getPanelMuestreo(), ventana);
+
+            // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
+            // En el Laboratorio 2 esto cierra el puerto serie.
+            ventana.addWindowListener(new WindowAdapter() {
+                @Override
+                public void windowClosing(WindowEvent e) {
+                    muestreador.detener();
+                }
+            });
+
+            ventana.setLocationRelativeTo(null);
             ventana.setVisible(true);
         });
     }

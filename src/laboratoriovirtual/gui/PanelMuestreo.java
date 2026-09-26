@@ -59,16 +59,12 @@ public class PanelMuestreo extends javax.swing.JPanel {
         panelFormulario.add(lblEtiquetaNuevo);
 
         panelCampo.setBackground(new java.awt.Color(255, 255, 255));
-        panelCampo.setLayout(new java.awt.FlowLayout(0, 0, 0));
+        panelCampo.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
 
         txtNuevoTiempo.setColumns(8);
         txtNuevoTiempo.setFont(new java.awt.Font("SansSerif", 0, 13)); // NOI18N
         txtNuevoTiempo.setText("500");
-        txtNuevoTiempo.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent evt) {
-                txtNuevoTiempoActionPerformed(evt);
-            }
-        });
+        txtNuevoTiempo.setToolTipText("Escribe el tiempo en milisegundos y pulsa Enter o Aplicar");
         panelCampo.add(txtNuevoTiempo);
 
         panelFormulario.add(panelCampo);
@@ -78,29 +74,16 @@ public class PanelMuestreo extends javax.swing.JPanel {
         panelFormulario.add(lblRango);
 
         panelBoton.setBackground(new java.awt.Color(255, 255, 255));
-        panelBoton.setLayout(new java.awt.FlowLayout(0, 0, 0));
+        panelBoton.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
 
         btnAplicar.setFont(new java.awt.Font("SansSerif", 1, 12)); // NOI18N
         btnAplicar.setText("Aplicar");
-        btnAplicar.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent evt) {
-                btnAplicarActionPerformed(evt);
-            }
-        });
         panelBoton.add(btnAplicar);
 
         panelFormulario.add(panelBoton);
 
         add(panelFormulario);
     }// </editor-fold>//GEN-END:initComponents
-
-    private void txtNuevoTiempoActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_txtNuevoTiempoActionPerformed
-        // TODO add your handling code here:
-    }//GEN-LAST:event_txtNuevoTiempoActionPerformed
-
-    private void btnAplicarActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnAplicarActionPerformed
-        // TODO add your handling code here:
-    }//GEN-LAST:event_btnAplicarActionPerformed
 
     /** Texto con el tiempo de muestreo que se está usando. */
     public JLabel getLblTiempoActual() {

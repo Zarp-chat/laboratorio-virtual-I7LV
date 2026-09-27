@@ -4,6 +4,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import javax.swing.SwingUtilities;
 import laboratoriovirtual.control.ControlMuestreo;
+import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.datos.FuenteAleatoria;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.gui.Tema;
@@ -31,9 +32,14 @@ public class Main {
 
             // Controladores: cada uno maneja una parte de la ventana.
             // En tareas siguientes se agregan aquí ControlSalidas,
-            // las gráficas y ControlGuardado.
+            // la gráfica digital y ControlGuardado.
             new ControlMuestreo(muestreador, ventana.getBarraEstado(),
                     ventana.getPanelMuestreo(), ventana);
+
+            // Gráfica en vivo de la pestaña "Señal analógica". Por ahora
+            // siempre muestra el canal 0 (A0); el cambio de canal con el
+            // selector llega con la tarea I7LV-16.
+            new GraficaAnalogica(muestreador, ventana.getPanelAnalogica(), 0);
 
             // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
             // En el Laboratorio 2 esto cierra el puerto serie.

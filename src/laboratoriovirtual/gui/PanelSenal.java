@@ -12,7 +12,8 @@ import javax.swing.JPanel;
  *
  * Diseñada con el editor visual de NetBeans (PanelSenal.form). No tiene
  * lógica: el controlador correspondiente usa los métodos get. La gráfica
- * se agregará dentro de panelGrafica en otra tarea.
+ * no está en el formulario: la agrega en código, dentro de panelGrafica,
+ * una subclase de laboratoriovirtual.control.GraficaSenal.
  */
 public class PanelSenal extends javax.swing.JPanel {
 
@@ -56,7 +57,7 @@ public class PanelSenal extends javax.swing.JPanel {
 
         panelSelector.setBackground(new java.awt.Color(245, 245, 245));
         panelSelector.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 10, 0));
-        panelSelector.setLayout(new java.awt.FlowLayout(0, 0, 0));
+        panelSelector.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
 
         lblCanal.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 0, 0, 8));
         lblCanal.setFont(new java.awt.Font("SansSerif", 0, 13)); // NOI18N
@@ -75,30 +76,21 @@ public class PanelSenal extends javax.swing.JPanel {
 
         panelPie.setBackground(new java.awt.Color(245, 245, 245));
         panelPie.setBorder(javax.swing.BorderFactory.createCompoundBorder(javax.swing.BorderFactory.createEmptyBorder(10, 0, 0, 0), javax.swing.BorderFactory.createCompoundBorder(javax.swing.BorderFactory.createMatteBorder(1, 0, 0, 0, new java.awt.Color(180, 180, 180)), javax.swing.BorderFactory.createEmptyBorder(8, 0, 0, 0))));
-        panelPie.setLayout(new java.awt.FlowLayout(2, 0, 0));
+        panelPie.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 0, 0));
 
         btnGuardar.setFont(new java.awt.Font("SansSerif", 1, 12)); // NOI18N
         btnGuardar.setText("Guardar esta señal…");
-        btnGuardar.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent evt) {
-                btnGuardarActionPerformed(evt);
-            }
-        });
         panelPie.add(btnGuardar);
 
         add(panelPie, java.awt.BorderLayout.SOUTH);
     }// </editor-fold>//GEN-END:initComponents
-
-    private void btnGuardarActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_btnGuardarActionPerformed
-        // TODO add your handling code here:
-    }//GEN-LAST:event_btnGuardarActionPerformed
 
     /** Selector del canal que se muestra en la gráfica. */
     public JComboBox<String> getComboCanal() {
         return comboCanal;
     }
 
-    /** Panel vacío, con BorderLayout, donde irá la gráfica. */
+    /** Panel con BorderLayout donde va la gráfica, en el centro. */
     public JPanel getPanelGrafica() {
         return panelGrafica;
     }

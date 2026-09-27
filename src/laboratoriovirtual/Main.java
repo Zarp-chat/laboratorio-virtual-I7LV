@@ -6,6 +6,7 @@ import javax.swing.SwingUtilities;
 import laboratoriovirtual.control.ControlMuestreo;
 import laboratoriovirtual.control.ControlSeleccion;
 import laboratoriovirtual.control.GraficaAnalogica;
+import laboratoriovirtual.control.GraficaDigital;
 import laboratoriovirtual.datos.FuenteAleatoria;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.gui.Tema;
@@ -32,8 +33,8 @@ public class Main {
             VentanaPrincipal ventana = new VentanaPrincipal();
 
             // Controladores: cada uno maneja una parte de la ventana.
-            // En tareas siguientes se agregan aquí ControlSalidas,
-            // la gráfica digital y ControlGuardado.
+            // En tareas siguientes se agregan aquí ControlSalidas y
+            // ControlGuardado.
             new ControlMuestreo(muestreador, ventana.getBarraEstado(),
                     ventana.getPanelMuestreo(), ventana);
 
@@ -45,6 +46,14 @@ public class Main {
                     muestreador, ventana.getPanelAnalogica(), 0);
             new ControlSeleccion(ventana.getPanelAnalogica().getComboCanal(),
                     graficaAnalogica);
+
+            // Gráfica en vivo de la pestaña "Señal digital": diagrama de
+            // tiempos con D0 a D3 y el valor en hexadecimal. Arranca con D0
+            // resaltada. Queda en una variable porque la conexión con el
+            // selector de la pestaña (I7LV-19) y el guardado de la señal
+            // (Sprint 3) la necesitarán.
+            GraficaDigital graficaDigital = new GraficaDigital(
+                    muestreador, ventana.getPanelDigital(), 0);
 
             // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
             // En el Laboratorio 2 esto cierra el puerto serie.

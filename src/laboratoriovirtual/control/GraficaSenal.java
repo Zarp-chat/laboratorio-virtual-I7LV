@@ -11,25 +11,25 @@ import laboratoriovirtual.gui.Tema;
 import laboratoriovirtual.muestreo.Muestra;
 import laboratoriovirtual.muestreo.Muestreador;
 import laboratoriovirtual.muestreo.OyenteMuestras;
-import org.jfree.chart.ChartPanel;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.axis.NumberAxis;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
-import org.jfree.chart.ui.RectangleInsets;
 import org.jfree.data.xy.XYSeriesCollection;
 
 /**
- * Base de las gráficas en vivo de una señal contra el tiempo, dentro de una
- * pestaña PanelSenal. La usa GraficaAnalogica (I7LV-17) y la usará la
- * gráfica digital en escalones (I7LV-20).
+ * Base de las gráficas en vivo de UNA señal contra el tiempo, dentro de una
+ * pestaña PanelSenal. La usa GraficaAnalogica (I7LV-17).
  *
- * Por qué una clase base: las dos gráficas solo se diferencian en tres
- * cosas: el valor que toman de cada Muestra, el eje Y y la forma de la línea
- * (continua o en escalones). Todo lo demás es común y queda aquí: el reparto
- * entre hilos, la ventana deslizante de 30 s, el historial, el cambio de
- * canal, el estilo de Tema y el ChartPanel sin zoom ni menú. La subclase
- * entrega esas tres piezas.
+ * Aquí queda todo lo de una gráfica de un solo canal: el reparto entre
+ * hilos, la ventana deslizante de 30 s, el historial y el cambio de canal
+ * (que vacía la gráfica). La subclase entrega el valor que toma de cada
+ * Muestra, el eje Y y la forma de la línea. El estilo de Tema y el
+ * ChartPanel sin zoom ni menú están en EstiloGrafica.
+ *
+ * La gráfica digital (I7LV-20) no hereda de esta clase: registra los cuatro
+ * canales a la vez y elegir un canal solo cambia cuál se resalta, sin vaciar
+ * nada. Ver GraficaDigital.
  *
  * Hilos:
  * - muestraRecibida() llega desde el hilo del Muestreador. Solo guarda el
@@ -64,13 +64,16 @@ import org.jfree.data.xy.XYSeriesCollection;
  * hilo, así que el Timer no puede estar a mitad de pasar puntos; cuando
  * cambiarCanal() vacía la serie, la cola ya solo tiene puntos del canal nuevo.
  */
-public abstract class GraficaSenal implements OyenteMuestras {
+public abstract class GraficaSenal implements OyenteMuestras, CanalSeleccionable {
 
-    /** Ancho de la ventana visible del eje X, en segundos. */
+    /** Ancho de la ventana visible del eje X, en segundos. También lo usa GraficaDigital. */
     public static final double VENTANA_VISIBLE_S = 30.0;
 
-    /** Cada cuánto se pasan los puntos a la gráfica y se redibuja, en milisegundos. */
-    private static final int PERIODO_REFRESCO_MS = 50;
+    /**
+     * Cada cuánto se pasan los puntos a la gráfica y se redibuja, en
+     * milisegundos. También lo usa GraficaDigital.
+     */
+    static final int PERIODO_REFRESCO_MS = 50;
 
     // Nombres de los canales ("A0", "D2"...), copiados del selector de la
     // pestaña: así la gráfica y el selector siempre dicen lo mismo. Su
@@ -117,7 +120,8 @@ public abstract class GraficaSenal implements OyenteMuestras {
         ejeTiempo.setRange(0.0, VENTANA_VISIBLE_S);
 
         grafica = crearGrafica(titulo(canal), ejeValor, linea);
-        panel.getPanelGrafica().add(crearPanelGrafica(grafica), BorderLayout.CENTER);
+        panel.getPanelGrafica().add(EstiloGrafica.crearPanelGrafica(grafica),
+                BorderLayout.CENTER);
 
         new Timer(PERIODO_REFRESCO_MS, e -> refrescar()).start();
 
@@ -150,6 +154,7 @@ public abstract class GraficaSenal implements OyenteMuestras {
     }
 
     /** Canal que se grafica: su posición en el selector de la pestaña. */
+    @Override
     public int getCanal() {
         synchronized (datos) {
             return canal;
@@ -191,6 +196,7 @@ public abstract class GraficaSenal implements OyenteMuestras {
      * @throws IllegalArgumentException si el canal no existe; en ese caso la
      *                                  gráfica sigue igual, con el canal anterior
      */
+    @Override
     public void cambiarCanal(int nuevoCanal) {
         // Antes de tocar nada: si el canal no existe, todo queda como estaba
         validarCanal(nuevoCanal);
@@ -257,14 +263,8 @@ public abstract class GraficaSenal implements OyenteMuestras {
     private JFreeChart crearGrafica(String titulo, NumberAxis ejeValor,
                                     XYItemRenderer linea) {
         // Ejes: línea, marcas y textos en negro
-        for (NumberAxis eje : new NumberAxis[]{ejeTiempo, ejeValor}) {
-            eje.setAxisLinePaint(Tema.NEGRO);
-            eje.setTickMarkPaint(Tema.NEGRO);
-            eje.setLabelPaint(Tema.NEGRO);
-            eje.setTickLabelPaint(Tema.NEGRO);
-            eje.setLabelFont(Tema.FUENTE_TEXTO_NEGRITA);
-            eje.setTickLabelFont(Tema.FUENTE_NOTA);
-        }
+        EstiloGrafica.aplicarAEje(ejeTiempo);
+        EstiloGrafica.aplicarAEje(ejeValor);
 
         // La señal (serie 0): línea roja de 2 px
         linea.setSeriesPaint(0, Tema.ROJO);
@@ -272,47 +272,10 @@ public abstract class GraficaSenal implements OyenteMuestras {
 
         XYSeriesCollection dataset = new XYSeriesCollection(datos.getSerie());
         XYPlot areaDibujo = new XYPlot(dataset, ejeTiempo, ejeValor, linea);
-        areaDibujo.setBackgroundPaint(Tema.BLANCO);
-        areaDibujo.setOutlinePaint(Tema.GRIS_BORDE);
-        BasicStroke lineaCuadricula = new BasicStroke(1.0f);
-        areaDibujo.setDomainGridlinePaint(Tema.GRIS_BORDE);
-        areaDibujo.setDomainGridlineStroke(lineaCuadricula);
-        areaDibujo.setRangeGridlinePaint(Tema.GRIS_BORDE);
-        areaDibujo.setRangeGridlineStroke(lineaCuadricula);
+        // Fondo blanco, borde gris y cuadrícula gris en las dos direcciones
+        EstiloGrafica.aplicarAAreaDibujo(areaDibujo);
 
         // Título pequeño con el nombre del canal y sin leyenda (una sola señal)
-        JFreeChart nueva = new JFreeChart(titulo, Tema.FUENTE_TEXTO_NEGRITA,
-                areaDibujo, false);
-        nueva.getTitle().setPaint(Tema.NEGRO);
-        nueva.setBackgroundPaint(Tema.BLANCO);
-        // Más margen a la derecha para que el último número del eje X no
-        // quede cortado contra el borde
-        nueva.setPadding(new RectangleInsets(8, 8, 8, 20));
-        return nueva;
-    }
-
-    private static ChartPanel crearPanelGrafica(JFreeChart grafica) {
-        ChartPanel panelGrafica = new ChartPanel(grafica);
-
-        // Sin zoom con el ratón ni menú emergente (clic derecho), porque
-        // rompen la ventana deslizante:
-        // - El zoom cambia el rango de los ejes, pero refrescar() vuelve a
-        //   fijar el eje X en la ventana de 30 s cada 50 ms, así que el zoom
-        //   se desharía solo. Y "alejar" o "restaurar" encienden el rango
-        //   automático: el eje Y dejaría de estar fijo.
-        // - El menú repite esas opciones de zoom y además trae "Guardar
-        //   como", que competiría con el botón "Guardar esta señal…" de la
-        //   pestaña (que guarda los datos, no una imagen).
-        panelGrafica.setMouseZoomable(false);
-        panelGrafica.setMouseWheelEnabled(false);
-        panelGrafica.setPopupMenu(null);
-
-        // Por defecto ChartPanel dibuja a lo sumo 1024 × 768 px y, si el
-        // panel es más grande, estira la imagen (textos deformados con la
-        // ventana maximizada). Sin ese límite se dibuja al tamaño real.
-        panelGrafica.setMaximumDrawWidth(Integer.MAX_VALUE);
-        panelGrafica.setMaximumDrawHeight(Integer.MAX_VALUE);
-
-        return panelGrafica;
+        return EstiloGrafica.crearGrafica(titulo, areaDibujo);
     }
 }

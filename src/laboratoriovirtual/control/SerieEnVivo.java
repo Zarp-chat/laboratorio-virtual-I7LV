@@ -32,8 +32,10 @@ import org.jfree.data.xy.XYSeries;
  * paso (I7LV-16). Los candados de Java se pueden volver a tomar desde el
  * mismo hilo, así que llamar a agregar() dentro de ese bloque no se traba.
  *
- * No sabe de canales ni de Muestra: recibe pares (tiempo, valor), así que
- * sirve igual para la gráfica analógica y para la digital (valores 0 y 1).
+ * No sabe de canales ni de Muestra: recibe pares (tiempo, valor). La usa la
+ * gráfica analógica. La digital (I7LV-20) registra los cuatro canales a la
+ * vez y tiene su propia clase de datos, SenalesDigitalesEnVivo, pero entrega
+ * su historial con este mismo tipo Punto.
  */
 public class SerieEnVivo {
 

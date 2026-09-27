@@ -7,18 +7,20 @@ import javax.swing.JComboBox;
  * Conecta el selector de canal de una pestaña con su gráfica (I7LV-16, R1):
  * al elegir otro canal en el selector, la gráfica pasa a mostrar ese canal.
  *
- * Es genérica: solo conoce un JComboBox<String> y la clase base GraficaSenal,
- * así que sirve igual para la pestaña "Señal analógica" y, sin cambios, para
- * la "Señal digital" (I7LV-19). La posición del canal en el selector es su
- * número: la gráfica toma los nombres de los canales de ese mismo selector.
+ * Es genérica: solo conoce un JComboBox<String> y la interfaz
+ * CanalSeleccionable, así que sirve igual para la pestaña "Señal analógica"
+ * (GraficaAnalogica) y, sin cambios, para la "Señal digital" (GraficaDigital,
+ * I7LV-19), donde elegir un canal cambia la señal resaltada. La posición del
+ * canal en el selector es su número: la gráfica toma los nombres de los
+ * canales de ese mismo selector.
  *
  * Todo ocurre en el hilo de Swing: los avisos del selector llegan ahí, y ahí
- * se debe llamar GraficaSenal.cambiarCanal().
+ * se debe llamar cambiarCanal().
  */
 public class ControlSeleccion {
 
     private final JComboBox<String> selector;
-    private final GraficaSenal grafica;
+    private final CanalSeleccionable grafica;
 
     /**
      * Deja el selector mostrando el canal actual de la gráfica y lo conecta
@@ -27,7 +29,7 @@ public class ControlSeleccion {
      * @param selector selector de canal de la pestaña
      * @param grafica  gráfica de esa misma pestaña
      */
-    public ControlSeleccion(JComboBox<String> selector, GraficaSenal grafica) {
+    public ControlSeleccion(JComboBox<String> selector, CanalSeleccionable grafica) {
         this.selector = selector;
         this.grafica = grafica;
 

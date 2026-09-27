@@ -39,6 +39,9 @@ public final class Tema {
     /** Gris de fondo secundario, RGB 245, 245, 245. Fondo de las pestañas y de su contenido. */
     public static final Color GRIS_FONDO = new Color(245, 245, 245);
 
+    /** Gris oscuro, RGB 90, 90, 90. Señales digitales no seleccionadas en la gráfica digital. */
+    public static final Color GRIS_OSCURO = new Color(90, 90, 90);
+
     // ---------------------------------------------------------------
     // Fuentes
 

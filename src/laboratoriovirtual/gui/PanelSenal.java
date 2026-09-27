@@ -13,7 +13,8 @@ import javax.swing.JPanel;
  * Diseñada con el editor visual de NetBeans (PanelSenal.form). No tiene
  * lógica: el controlador correspondiente usa los métodos get. La gráfica
  * no está en el formulario: la agrega en código, dentro de panelGrafica,
- * una subclase de laboratoriovirtual.control.GraficaSenal.
+ * la gráfica de la pestaña (GraficaAnalogica o GraficaDigital, del paquete
+ * laboratoriovirtual.control).
  */
 public class PanelSenal extends javax.swing.JPanel {
 

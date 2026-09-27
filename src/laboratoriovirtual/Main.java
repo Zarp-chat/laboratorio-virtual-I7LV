@@ -4,6 +4,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import javax.swing.SwingUtilities;
 import laboratoriovirtual.control.ControlMuestreo;
+import laboratoriovirtual.control.ControlSeleccion;
 import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.datos.FuenteAleatoria;
 import laboratoriovirtual.datos.FuenteDeDatos;
@@ -36,10 +37,14 @@ public class Main {
             new ControlMuestreo(muestreador, ventana.getBarraEstado(),
                     ventana.getPanelMuestreo(), ventana);
 
-            // Gráfica en vivo de la pestaña "Señal analógica". Por ahora
-            // siempre muestra el canal 0 (A0); el cambio de canal con el
-            // selector llega con la tarea I7LV-16.
-            new GraficaAnalogica(muestreador, ventana.getPanelAnalogica(), 0);
+            // Gráfica en vivo de la pestaña "Señal analógica". Arranca en el
+            // canal 0 (A0) y el selector de la pestaña la cambia de canal.
+            // Queda en una variable porque el guardado de la señal
+            // (Sprint 3) la necesitará.
+            GraficaAnalogica graficaAnalogica = new GraficaAnalogica(
+                    muestreador, ventana.getPanelAnalogica(), 0);
+            new ControlSeleccion(ventana.getPanelAnalogica().getComboCanal(),
+                    graficaAnalogica);
 
             // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
             // En el Laboratorio 2 esto cierra el puerto serie.

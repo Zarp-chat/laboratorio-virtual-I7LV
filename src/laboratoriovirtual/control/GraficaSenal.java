@@ -2,6 +2,7 @@ package laboratoriovirtual.control;
 
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
+import java.util.ArrayList;
 import java.util.List;
 import javax.swing.JComboBox;
 import javax.swing.Timer;
@@ -26,8 +27,9 @@ import org.jfree.data.xy.XYSeriesCollection;
  * Por qué una clase base: las dos gráficas solo se diferencian en tres
  * cosas: el valor que toman de cada Muestra, el eje Y y la forma de la línea
  * (continua o en escalones). Todo lo demás es común y queda aquí: el reparto
- * entre hilos, la ventana deslizante de 30 s, el historial, el estilo de Tema
- * y el ChartPanel sin zoom ni menú. La subclase entrega esas tres piezas.
+ * entre hilos, la ventana deslizante de 30 s, el historial, el cambio de
+ * canal, el estilo de Tema y el ChartPanel sin zoom ni menú. La subclase
+ * entrega esas tres piezas.
  *
  * Hilos:
  * - muestraRecibida() llega desde el hilo del Muestreador. Solo guarda el
@@ -38,6 +40,29 @@ import org.jfree.data.xy.XYSeriesCollection;
  *   muestreo mínimo (10 ms, 100 muestras por segundo) la gráfica se redibuja
  *   20 veces por segundo y no 100, y el hilo de Swing queda libre para
  *   atender los clics.
+ * - cambiarCanal() (I7LV-16) se llama desde el hilo de Swing, con el
+ *   muestreo corriendo o detenido.
+ *
+ * Cambio de canal sin mezclar canales (I7LV-16). Después de un cambio, ni la
+ * gráfica ni el historial pueden tener un solo punto del canal anterior,
+ * aunque el Muestreador esté registrando una muestra justo en ese momento.
+ * Se garantiza con un único candado, el del objeto datos (SerieEnVivo), que
+ * usan las dos operaciones:
+ * - muestraRecibida() lee el canal, saca el valor de la muestra y guarda el
+ *   punto en el historial y en la cola dentro de un solo
+ *   synchronized (datos).
+ * - cambiarCanal() cambia el canal y vacía el historial y la cola dentro de
+ *   otro synchronized (datos).
+ * Dos bloques con el mismo candado nunca corren a la vez, así que cada
+ * muestra queda del todo antes o del todo después del cambio. Si queda
+ * antes, su punto ya está en el historial y en la cola, y el cambio lo borra.
+ * Si queda después, ya leyó el canal nuevo. No hay un tercer caso. Sin el
+ * candado sí lo habría: el Muestreador lee el canal viejo, el cambio vacía
+ * todo y enseguida el Muestreador guarda el punto viejo.
+ * La serie dibujada no necesita el candado: solo recibe puntos de la cola, y
+ * solo en el hilo de Swing (el Timer). cambiarCanal() corre en ese mismo
+ * hilo, así que el Timer no puede estar a mitad de pasar puntos; cuando
+ * cambiarCanal() vacía la serie, la cola ya solo tiene puntos del canal nuevo.
  */
 public abstract class GraficaSenal implements OyenteMuestras {
 
@@ -47,7 +72,16 @@ public abstract class GraficaSenal implements OyenteMuestras {
     /** Cada cuánto se pasan los puntos a la gráfica y se redibuja, en milisegundos. */
     private static final int PERIODO_REFRESCO_MS = 50;
 
-    private final int canal;
+    // Nombres de los canales ("A0", "D2"...), copiados del selector de la
+    // pestaña: así la gráfica y el selector siempre dicen lo mismo. Su
+    // cantidad es el rango de canales válidos.
+    private final List<String> nombresCanales;
+
+    // Canal que se grafica. Lo cambia el hilo de Swing y lo lee el del
+    // Muestreador, así que, pasado el constructor (que lo fija antes de
+    // registrarse como oyente), solo se usa dentro de synchronized (datos).
+    private int canal;
+
     private final SerieEnVivo datos = new SerieEnVivo(VENTANA_VISIBLE_S);
     private final NumberAxis ejeTiempo;
     private final JFreeChart grafica;
@@ -59,29 +93,30 @@ public abstract class GraficaSenal implements OyenteMuestras {
      *
      * @param muestreador de donde llegan las muestras
      * @param panel       pestaña donde va la gráfica
-     * @param canal       canal a graficar: posición en el selector de la pestaña
+     * @param canal       canal con el que arranca: posición en el selector de
+     *                    la pestaña
      * @param ejeValor    eje Y, con su rótulo y su rango; aquí se le aplica el estilo
      * @param linea       renderer que decide cómo se dibuja la señal; aquí se le
      *                    aplican el color y el grosor
+     * @throws IllegalArgumentException si el canal no existe en el selector
      */
     protected GraficaSenal(Muestreador muestreador, PanelSenal panel, int canal,
                            NumberAxis ejeValor, XYItemRenderer linea) {
         JComboBox<String> selector = panel.getComboCanal();
-        if (canal < 0 || canal >= selector.getItemCount()) {
-            throw new IllegalArgumentException("No existe el canal " + canal
-                    + " en esta pestaña");
+        List<String> nombres = new ArrayList<>();
+        for (int i = 0; i < selector.getItemCount(); i++) {
+            nombres.add(selector.getItemAt(i));
         }
-        this.canal = canal;
+        nombresCanales = List.copyOf(nombres);
 
-        // El nombre del canal ("A0", "D2"...) se toma del selector de la
-        // pestaña, así la gráfica y el selector siempre dicen lo mismo.
-        String titulo = "Canal " + selector.getItemAt(canal);
+        validarCanal(canal);
+        this.canal = canal;
 
         ejeTiempo = new NumberAxis("Tiempo (s)");
         // Rango fijo que refrescar() mueve a mano. Al comenzar va de 0 a 30 s.
         ejeTiempo.setRange(0.0, VENTANA_VISIBLE_S);
 
-        grafica = crearGrafica(titulo, ejeValor, linea);
+        grafica = crearGrafica(titulo(canal), ejeValor, linea);
         panel.getPanelGrafica().add(crearPanelGrafica(grafica), BorderLayout.CENTER);
 
         new Timer(PERIODO_REFRESCO_MS, e -> refrescar()).start();
@@ -92,9 +127,11 @@ public abstract class GraficaSenal implements OyenteMuestras {
 
     /**
      * Toma de la muestra el valor que se grafica. Se llama desde el hilo del
-     * Muestreador, así que no debe tocar Swing. Puede llamarse antes de que
-     * termine el constructor de la subclase (el oyente se registra en el de
-     * esta clase), así que no debe usar campos propios de la subclase.
+     * Muestreador, así que no debe tocar Swing. Se llama con el candado
+     * tomado, así que debe ser rápido y no esperar nada. Puede llamarse
+     * antes de que termine el constructor de la subclase (el oyente se
+     * registra en el de esta clase), así que no debe usar campos propios de
+     * la subclase.
      *
      * @param muestra lectura completa de todas las entradas
      * @param canal   canal que muestra esta gráfica
@@ -104,12 +141,19 @@ public abstract class GraficaSenal implements OyenteMuestras {
 
     /**
      * Copia inmutable de todos los puntos (tiempo, valor) recibidos desde el
-     * último Iniciar, aunque ya no se dibujen. Pensado para guardar la señal
-     * en un archivo (Sprint 3). Seguro entre hilos: ver
-     * {@link SerieEnVivo#getHistorial()}.
+     * último Iniciar o el último cambio de canal, aunque ya no se dibujen.
+     * Pensado para guardar la señal en un archivo (Sprint 3). Seguro entre
+     * hilos: ver {@link SerieEnVivo#getHistorial()}.
      */
     public List<SerieEnVivo.Punto> getHistorial() {
         return datos.getHistorial();
+    }
+
+    /** Canal que se grafica: su posición en el selector de la pestaña. */
+    public int getCanal() {
+        synchronized (datos) {
+            return canal;
+        }
     }
 
     // ===================== Avisos del Muestreador =====================
@@ -117,13 +161,63 @@ public abstract class GraficaSenal implements OyenteMuestras {
 
     @Override
     public void muestraRecibida(Muestra muestra) {
-        datos.agregar(muestra.getTiempo(), valorDe(muestra, canal));
+        // Leer el canal, sacar el valor y guardar el punto son un solo paso:
+        // cambiarCanal() no puede meterse en medio (ver el comentario de la
+        // clase).
+        synchronized (datos) {
+            datos.agregar(muestra.getTiempo(), valorDe(muestra, canal));
+        }
     }
 
     // errorEnFuente() no se sobrescribe: si la fuente falla, la gráfica
     // conserva lo que ya dibujó. ControlMuestreo es quien avisa al usuario.
 
     // ===================== Hilo de Swing =====================
+
+    /**
+     * Pasa a graficar otro canal (I7LV-16). Vacía la serie dibujada, la cola
+     * de puntos pendientes y el historial, y cambia el título ("Canal A3").
+     * Desde ese momento solo se registra el canal nuevo. El eje X arranca en
+     * el tiempo de su primera muestra, con la misma ventana de 30 s: el
+     * tiempo no vuelve a cero, porque lo lleva el Muestreador.
+     *
+     * Funciona igual con el muestreo corriendo o detenido. Si está detenido,
+     * la gráfica queda vacía con el título nuevo hasta el siguiente Iniciar.
+     * Elegir el canal que ya se grafica no hace nada.
+     *
+     * Se llama desde el hilo de Swing.
+     *
+     * @param nuevoCanal posición del canal en el selector de la pestaña
+     * @throws IllegalArgumentException si el canal no existe; en ese caso la
+     *                                  gráfica sigue igual, con el canal anterior
+     */
+    public void cambiarCanal(int nuevoCanal) {
+        // Antes de tocar nada: si el canal no existe, todo queda como estaba
+        validarCanal(nuevoCanal);
+
+        // Paso 1, con el mismo candado de muestraRecibida(): cambiar el canal
+        // y descartar lo recibido del anterior, sin que una muestra se meta
+        // en medio.
+        synchronized (datos) {
+            if (nuevoCanal == canal) {
+                return;
+            }
+            canal = nuevoCanal;
+            datos.vaciarRecibidos();
+        }
+
+        // Paso 2, ya sin el candado: la serie y el título solo se tocan en
+        // este hilo, y así el Muestreador no espera mientras JFreeChart avisa
+        // los cambios. Con los avisos de la gráfica apagados mientras tanto,
+        // los dos cambios llegan al ChartPanel como un solo redibujo.
+        grafica.setNotify(false);
+        try {
+            datos.vaciarSerie();
+            grafica.getTitle().setText(titulo(nuevoCanal));
+        } finally {
+            grafica.setNotify(true);
+        }
+    }
 
     /** Lo llama el Timer cada 50 ms, en el hilo de Swing. */
     private void refrescar() {
@@ -140,6 +234,21 @@ public abstract class GraficaSenal implements OyenteMuestras {
         } finally {
             grafica.setNotify(true);
         }
+    }
+
+    // ===================== Canales =====================
+
+    private void validarCanal(int canal) {
+        if (canal < 0 || canal >= nombresCanales.size()) {
+            throw new IllegalArgumentException("No existe el canal " + canal
+                    + " en esta pestaña (van del 0 al "
+                    + (nombresCanales.size() - 1) + ")");
+        }
+    }
+
+    /** Título de la gráfica para un canal, por ejemplo "Canal A3". */
+    private String titulo(int canal) {
+        return "Canal " + nombresCanales.get(canal);
     }
 
     // ===================== Construcción de la gráfica =====================

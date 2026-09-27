@@ -17,11 +17,20 @@ import org.jfree.data.xy.XYSeries;
  * Reparto de hilos:
  * - agregar() lo llama el hilo del Muestreador. Guarda el punto en la cola y
  *   en el historial; no toca la serie.
- * - procesarPendientes(), getSerie(), getInicioVentana() y getFinVentana()
- *   se usan solo desde el hilo de Swing (en el programa, desde el Timer de
- *   GraficaSenal). JFreeChart lee la serie al dibujar, también en ese hilo,
- *   así que nunca la usan dos hilos a la vez.
+ * - procesarPendientes(), vaciarRecibidos(), vaciarSerie(), getSerie(),
+ *   getInicioVentana() y getFinVentana() se usan solo desde el hilo de Swing
+ *   (en el programa, desde el Timer de GraficaSenal y desde el cambio de
+ *   canal). JFreeChart lee la serie al dibujar, también en ese hilo, así que
+ *   nunca la usan dos hilos a la vez.
  * - hayPendientes() y getHistorial() se pueden llamar desde cualquier hilo.
+ *
+ * Candado: el propio objeto. agregar(), vaciarRecibidos() y getHistorial()
+ * son synchronized, así que nunca se mezclan entre sí. Quien necesite que
+ * otro paso ocurra junto con agregar(), sin que nadie se meta en medio,
+ * puede tomar este mismo candado con synchronized (serie) { ... }:
+ * GraficaSenal lo hace para leer el canal y registrar el punto en un solo
+ * paso (I7LV-16). Los candados de Java se pueden volver a tomar desde el
+ * mismo hilo, así que llamar a agregar() dentro de ese bloque no se traba.
  *
  * No sabe de canales ni de Muestra: recibe pares (tiempo, valor), así que
  * sirve igual para la gráfica analógica y para la digital (valores 0 y 1).
@@ -42,12 +51,13 @@ public class SerieEnVivo {
     private final double anchoVentana;
 
     // Puntos recibidos que la serie todavía no tiene. ConcurrentLinkedQueue
-    // deja que un hilo agregue mientras otro saca, sin bloquear a ninguno.
+    // deja que el hilo de Swing saque sin tomar el candado mientras el
+    // Muestreador agrega. Se agrega y se vacía solo con el candado.
     private final Queue<Punto> pendientes = new ConcurrentLinkedQueue<>();
 
-    // Todos los puntos desde el último Iniciar. Lo escribe el hilo del
-    // Muestreador y lo puede copiar cualquier otro, así que la lista y
-    // ultimoTiempoRecibido solo se usan dentro de synchronized (historial).
+    // Todos los puntos desde el último Iniciar o el último cambio de canal.
+    // Lo escribe el hilo del Muestreador y lo puede copiar cualquier otro,
+    // así que la lista y ultimoTiempoRecibido solo se usan con el candado.
     private final List<Punto> historial = new ArrayList<>();
     private double ultimoTiempoRecibido = Double.NEGATIVE_INFINITY;
 
@@ -55,6 +65,13 @@ public class SerieEnVivo {
     // Solo se usan desde el hilo de Swing.
     private final XYSeries serie;
     private double ultimoTiempoDibujado = Double.NEGATIVE_INFINITY;
+
+    // Dónde arranca el eje X mientras la serie no llena la ventana: 0 al
+    // comenzar y con cada nuevo Iniciar (el Muestreador cuenta el tiempo
+    // desde cero). Después de vaciarSerie() lo decide el primer punto que se
+    // dibuje, porque ahí el tiempo no vuelve a cero. Solo hilo de Swing.
+    private double inicioEje = 0.0;
+    private boolean esperandoPrimerPunto = false;
 
     /**
      * @param anchoVentanaS ancho de la ventana visible, en segundos
@@ -79,15 +96,16 @@ public class SerieEnVivo {
      * Si el tiempo es menor que el del punto anterior, es un nuevo Iniciar:
      * el historial se vacía antes de guardar el punto.
      */
-    public void agregar(double tiempo, double valor) {
+    public synchronized void agregar(double tiempo, double valor) {
         Punto punto = new Punto(tiempo, valor);
-        synchronized (historial) {
-            if (tiempo < ultimoTiempoRecibido) {
-                historial.clear();
-            }
-            historial.add(punto);
-            ultimoTiempoRecibido = tiempo;
+        if (tiempo < ultimoTiempoRecibido) {
+            historial.clear();
         }
+        historial.add(punto);
+        ultimoTiempoRecibido = tiempo;
+        // También con el candado: el punto entra al historial y a la cola en
+        // un solo paso, y vaciarRecibidos() no puede quedar en medio,
+        // borrándolo de uno y dejándolo en el otro.
         pendientes.add(punto);
     }
 
@@ -100,9 +118,10 @@ public class SerieEnVivo {
 
     /**
      * Devuelve una copia de todos los puntos recibidos desde el último
-     * Iniciar, en orden de tiempo, incluso los que ya salieron de la ventana
-     * visible o que la gráfica todavía no dibuja. Pensado para guardar la
-     * señal en un archivo (Sprint 3).
+     * Iniciar (o desde el último vaciarRecibidos(), si fue después), en
+     * orden de tiempo, incluso los que ya salieron de la ventana visible o
+     * que la gráfica todavía no dibuja. Pensado para guardar la señal en un
+     * archivo (Sprint 3).
      *
      * Seguro entre hilos: se puede llamar desde cualquier hilo, también con
      * el muestreo corriendo. La copia se hace con el mismo candado con el que
@@ -112,13 +131,42 @@ public class SerieEnVivo {
      *
      * @return lista inmutable de puntos (tiempo, valor)
      */
-    public List<Punto> getHistorial() {
-        synchronized (historial) {
-            return List.copyOf(historial);
-        }
+    public synchronized List<Punto> getHistorial() {
+        return List.copyOf(historial);
     }
 
     // ===================== Hilo de Swing =====================
+
+    /**
+     * Descarta todos los puntos recibidos: vacía el historial y la cola de
+     * pendientes en un solo paso, con el candado, así que un agregar() queda
+     * del todo antes (y su punto se borra) o del todo después. No toca la
+     * serie dibujada: para eso está vaciarSerie().
+     *
+     * Se llama desde el hilo de Swing, el mismo que saca puntos de la cola:
+     * así nadie está a mitad de sacar uno mientras se vacía.
+     *
+     * No olvida el tiempo del último punto recibido: si el siguiente llega
+     * con un tiempo menor, se sigue reconociendo como un nuevo Iniciar.
+     */
+    public synchronized void vaciarRecibidos() {
+        historial.clear();
+        pendientes.clear();
+    }
+
+    /**
+     * Vacía la serie dibujada. El eje X arrancará en el tiempo del primer
+     * punto que se dibuje después (ver procesarPendientes()), con la misma
+     * ventana de 30 s.
+     *
+     * Si todavía no se ha dibujado nada, la gráfica sigue como al comenzar
+     * (eje X de 0 a 30 s): el primer punto que llegue será el del primer
+     * Iniciar, cuyo tiempo empieza en cero.
+     */
+    public void vaciarSerie() {
+        serie.clear();
+        esperandoPrimerPunto = ultimoTiempoDibujado != Double.NEGATIVE_INFINITY;
+    }
 
     /**
      * Pasa a la serie todos los puntos de la cola y quita de ella los que
@@ -127,7 +175,7 @@ public class SerieEnVivo {
      * vez por llamada y no una vez por punto.
      *
      * Si un punto tiene un tiempo menor que el anterior, es un nuevo Iniciar:
-     * la serie se vacía antes de agregarlo.
+     * la serie se vacía antes de agregarlo y el eje X vuelve a arrancar en 0.
      */
     public void procesarPendientes() {
         if (pendientes.isEmpty()) {
@@ -138,7 +186,16 @@ public class SerieEnVivo {
             Punto punto;
             while ((punto = pendientes.poll()) != null) {
                 if (punto.tiempo() < ultimoTiempoDibujado) {
+                    // Nuevo Iniciar: el tiempo volvió a empezar desde cero
                     serie.clear();
+                    inicioEje = 0.0;
+                    esperandoPrimerPunto = false;
+                } else if (esperandoPrimerPunto) {
+                    // Primer punto después de vaciarSerie() (cambio de
+                    // canal): el tiempo siguió corriendo, así que el eje X
+                    // arranca aquí y no en 0
+                    inicioEje = punto.tiempo();
+                    esperandoPrimerPunto = false;
                 }
                 serie.add(punto.tiempo(), punto.valor(), false);
                 ultimoTiempoDibujado = punto.tiempo();
@@ -156,17 +213,19 @@ public class SerieEnVivo {
     }
 
     /**
-     * Fin de la ventana visible, en segundos: el tiempo del último punto, o
-     * el ancho de la ventana mientras no se llegue a él. Así, al comenzar,
-     * el eje X va de 0 a 30 s, y después sigue al último punto.
+     * Inicio de la ventana visible, en segundos: donde arranca el eje X
+     * mientras la serie no llena los 30 s, y después, 30 s antes del último
+     * punto. Así, al comenzar, el eje X va de 0 a 30 s; después de un cambio
+     * de canal, desde el tiempo del primer punto del canal nuevo; y después
+     * sigue al último punto.
      */
-    public double getFinVentana() {
-        return Math.max(anchoVentana, ultimoTiempoDibujado);
+    public double getInicioVentana() {
+        return Math.max(inicioEje, ultimoTiempoDibujado - anchoVentana);
     }
 
-    /** Inicio de la ventana visible, en segundos. */
-    public double getInicioVentana() {
-        return getFinVentana() - anchoVentana;
+    /** Fin de la ventana visible, en segundos: siempre 30 s después del inicio. */
+    public double getFinVentana() {
+        return getInicioVentana() + anchoVentana;
     }
 
     /** Quita de la serie los puntos anteriores al inicio de la ventana. */

@@ -10,11 +10,10 @@ import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
  * Gráfica en vivo de una señal analógica contra el tiempo (I7LV-17), en la
  * pestaña "Señal analógica": línea continua roja y eje Y fijo de 0 a 5 V.
  *
- * El funcionamiento (hilos, ventana de 30 s, historial y estilo) está en
- * GraficaSenal; aquí solo va lo propio de las señales analógicas.
- *
- * Por ahora el canal es fijo. El cambio de canal con el selector es la
- * tarea I7LV-16.
+ * El funcionamiento (hilos, ventana de 30 s, historial, cambio de canal y
+ * estilo) está en GraficaSenal; aquí solo va lo propio de las señales
+ * analógicas. El selector de la pestaña cambia el canal a través de
+ * ControlSeleccion (I7LV-16).
  */
 public class GraficaAnalogica extends GraficaSenal {
 
@@ -28,7 +27,7 @@ public class GraficaAnalogica extends GraficaSenal {
      *
      * @param muestreador de donde llegan las muestras
      * @param panel       pestaña "Señal analógica"
-     * @param canal       canal analógico a graficar (0 es A0)
+     * @param canal       canal analógico con el que arranca (0 es A0)
      */
     public GraficaAnalogica(Muestreador muestreador, PanelSenal panel, int canal) {
         super(muestreador, panel, canal, crearEjeVoltaje(), crearLinea());

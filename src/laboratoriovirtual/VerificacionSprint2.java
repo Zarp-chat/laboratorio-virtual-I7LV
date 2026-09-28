@@ -2,7 +2,11 @@ package laboratoriovirtual;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Container;
+import java.awt.Dimension;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.Insets;
 import java.awt.Paint;
 import java.awt.Rectangle;
 import java.awt.geom.Rectangle2D;
@@ -41,10 +45,12 @@ import laboratoriovirtual.control.SerieEnVivo;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.datos.FuenteDeDatosException;
 import laboratoriovirtual.gui.BarraEstado;
+import laboratoriovirtual.gui.LedIndicador;
 import laboratoriovirtual.gui.PanelMuestreo;
 import laboratoriovirtual.gui.PanelSalidas;
 import laboratoriovirtual.gui.PanelSenal;
 import laboratoriovirtual.gui.Tema;
+import laboratoriovirtual.gui.VentanaPrincipal;
 import laboratoriovirtual.muestreo.Muestra;
 import laboratoriovirtual.muestreo.Muestreador;
 import org.jfree.chart.ChartPanel;
@@ -60,7 +66,7 @@ import org.jfree.data.xy.XYSeriesCollection;
 
 /**
  * Verifica las tareas del Sprint 2 (I7LV-17, I7LV-16, I7LV-20, I7LV-19,
- * I7LV-21 e I7LV-22) sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
+ * I7LV-21, I7LV-22 e I7LV-18 fase A) sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
  * [OK] o [FALLA] por criterio, igual que VerificacionSprint1. Una excepción
  * no capturada, en cualquier hilo, se imprime completa y cuenta como FALLA;
  * el programa nunca se queda colgado por ella (ver main()).
@@ -103,6 +109,13 @@ import org.jfree.data.xy.XYSeriesCollection;
  * fuente se revisa que conexión y muestreo vayan por separado: las salidas
  * funcionan con el muestreo detenido, y detenerlo no las cambia ni
  * desconecta la fuente.
+ *
+ * I7LV-18 fase A: arma la ventana real (VentanaPrincipal) sin mostrarla y
+ * revisa que el texto de la barra de estado se vea completo en su tamaño
+ * mínimo, con el mismo cálculo que usa Swing para dibujar la etiqueta, y que
+ * la etiqueta no cambie de ancho con el contador. Con el ControlSalidas real
+ * revisa que los LEDs de la pestaña Salidas cambien junto con las etiquetas,
+ * y dibuja un LedIndicador en una imagen para revisar sus colores.
  */
 public class VerificacionSprint2 {
 
@@ -220,7 +233,7 @@ public class VerificacionSprint2 {
         System.out.println("===================================");
         System.out.println("Resultado: " + aprobados + " aprobados, " + fallidos + " fallidos");
         System.out.println(fallidos == 0
-                ? "I7LV-17, I7LV-16, I7LV-20, I7LV-19, I7LV-21 e I7LV-22 cumplen sus criterios."
+                ? "I7LV-17, I7LV-16, I7LV-20, I7LV-19, I7LV-21, I7LV-22 e I7LV-18 (fase A) cumplen sus criterios."
                 : "Hay criterios sin cumplir: revisa las líneas [FALLA].");
         System.exit(fallidos == 0 ? 0 : 1);
     }
@@ -277,6 +290,17 @@ public class VerificacionSprint2 {
         verificarIniciarDetenerSinReconectar();
 
         revisarErroresEnOtrosHilos("I7LV-21 e I7LV-22");
+
+        titulo("I7LV-18 fase A  Texto de la barra de estado y LEDs de las salidas (ventana real sin mostrar)");
+
+        verificarTextoBarra();
+        verificarTextoDelControl();
+        verificarLedsAlCrear();
+        verificarLedsSiguenEscrituras();
+        verificarLedsConFalla();
+        verificarDibujoLed();
+
+        revisarErroresEnOtrosHilos("I7LV-18 fase A");
     }
 
     // ===================== Excepciones no capturadas =====================
@@ -3038,11 +3062,14 @@ public class VerificacionSprint2 {
 
     /**
      * Lo que muestra la pestaña Salidas en un instante, por salida: si el
-     * interruptor está pulsado y habilitado, y el texto y el color de su
-     * etiqueta.
+     * interruptor está pulsado y habilitado, el texto y el color de su
+     * etiqueta, y si su LED está encendido y qué dice su ayuda emergente
+     * (I7LV-18). Como las pruebas de I7LV-21 e I7LV-22 comparan fotos
+     * completas, "no cambia nada" también cubre los LEDs.
      */
     private record FotoSalidas(List<Boolean> pulsados, List<Boolean> habilitados,
-                               List<String> textos, List<Color> colores) {
+                               List<String> textos, List<Color> colores,
+                               List<Boolean> leds, List<String> ayudas) {
     }
 
     /** La barra y la pestaña Muestreo, que nunca se muestran, con su ControlMuestreo. */
@@ -3087,7 +3114,13 @@ public class VerificacionSprint2 {
             textos.add(estado.getText());
             colores.add(estado.getForeground());
         }
-        return new FotoSalidas(pulsados, habilitados, textos, colores);
+        List<Boolean> leds = new ArrayList<>();
+        List<String> ayudas = new ArrayList<>();
+        for (LedIndicador led : s.panel.getLeds()) {
+            leds.add(led.isEncendido());
+            ayudas.add(led.getToolTipText());
+        }
+        return new FotoSalidas(pulsados, habilitados, textos, colores, leds, ayudas);
     }
 
     /** Copia de los avisos que dio el control. */
@@ -3156,7 +3189,7 @@ public class VerificacionSprint2 {
             etiquetas.add("\"" + f.textos().get(i) + "\" " + nombreColor(f.colores().get(i)));
         }
         return "interruptores pulsados " + f.pulsados() + ", habilitados " + f.habilitados()
-                + ", etiquetas " + etiquetas;
+                + ", etiquetas " + etiquetas + ", LEDs encendidos " + f.leds() + ", ayudas " + f.ayudas();
     }
 
     private static String nombreColor(Color color) {
@@ -3167,6 +3200,429 @@ public class VerificacionSprint2 {
             return "en negro";
         }
         return String.format("en RGB %d, %d, %d", color.getRed(), color.getGreen(), color.getBlue());
+    }
+
+    // ===================== I7LV-18 fase A: barra de estado y LEDs =====================
+
+    /** Contadores con los que se prueba el texto de la barra: 1, 4 y 7 dígitos. */
+    private static final long[] CONTADORES_BARRA = { 1, 1_234, 9_999_999 };
+
+    /**
+     * El texto de la barra en la ventana real, que nunca se muestra: el
+     * constructor de VentanaPrincipal la arma con pack() pero no la hace
+     * visible. Se prueba en su tamaño mínimo (800 × 550) y en el de arranque
+     * (1000 × 700), con los textos de ControlMuestreo.textoEstado() en los
+     * tres estados, a 10 ms y a 10000 ms (el tiempo más largo alarga el
+     * texto). "Se ve completo" se decide con el mismo cálculo con que Swing
+     * dibuja la etiqueta (SwingUtilities.layoutCompoundLabel): si el texto no
+     * cabe, lo devuelve recortado con "...".
+     */
+    private static void verificarTextoBarra() throws Exception {
+        List<String> textos = new ArrayList<>();
+        for (int periodo : new int[] { Muestreador.PERIODO_MIN_MS, Muestreador.PERIODO_MAX_MS }) {
+            for (long muestras : CONTADORES_BARRA) {
+                textos.add(ControlMuestreo.textoEstado(true, true, periodo, muestras));
+            }
+            textos.add(ControlMuestreo.textoEstado(false, true, periodo, 0));
+        }
+        textos.add(ControlMuestreo.textoEstado(false, false, Muestreador.PERIODO_MIN_MS, 0));
+
+        List<List<MedidaBarra>> porTamano = enSwing(() -> {
+            Tema.aplicar(); // como Main, antes de crear la ventana
+            VentanaPrincipal ventana = new VentanaPrincipal();
+            try {
+                return List.of(medirBarra(ventana, ventana.getMinimumSize(), textos),
+                        medirBarra(ventana, ventana.getPreferredSize(), textos));
+            } finally {
+                ventana.dispose();
+            }
+        });
+
+        for (List<MedidaBarra> medidas : porTamano) {
+            MedidaBarra masLargo = medidas.stream()
+                    .max(Comparator.comparingInt(MedidaBarra::anchoTexto)).orElseThrow();
+            List<MedidaBarra> recortados = medidas.stream().filter(m -> !m.completo()).toList();
+            verificar(String.format("Ventana de %d × %d: el texto de la barra se ve completo, sin \"...\" y sin "
+                                    + "tocar los botones, en los 3 estados, con 1, 1.234 y 9.999.999 muestras, a 10 "
+                                    + "y a 10000 ms (%d textos; el más largo mide %d px de %d disponibles)",
+                            masLargo.anchoVentana(), masLargo.altoVentana(), medidas.size(),
+                            masLargo.anchoTexto(), masLargo.anchoDisponible()),
+                    recortados.isEmpty(), "no se ven completos: " + recortados);
+        }
+
+        List<String> anchos = new ArrayList<>();
+        boolean fijos = true;
+        for (List<MedidaBarra> medidas : porTamano) {
+            fijos &= medidas.stream().map(MedidaBarra::etiqueta).distinct().count() == 1
+                    && medidas.stream().map(MedidaBarra::botones).distinct().count() == 1
+                    && medidas.stream().map(MedidaBarra::anchoBarra).distinct().count() == 1;
+            anchos.add(medidas.stream().map(m -> m.etiqueta().width + " px").distinct().toList()
+                    + " con la ventana de " + medidas.get(0).anchoVentana());
+        }
+        verificar("El ancho de la etiqueta de estado no cambia entre esos contadores ni entre los estados, y la "
+                        + "barra y los botones no cambian de tamaño ni se mueven: " + String.join(", ", anchos),
+                fijos, "etiqueta, botones y barra: " + porTamano.stream().map(medidas -> medidas.stream()
+                        .map(m -> m.etiqueta() + " " + m.botones() + " " + m.anchoBarra()).distinct().toList())
+                        .toList());
+    }
+
+    /**
+     * El texto que arma ControlMuestreo.textoEstado() y el que pone el
+     * ControlMuestreo real en su barra, que nunca se muestra. La fuente es
+     * FuenteDePrueba y el tiempo de muestreo el máximo, 10 s: después de la
+     * primera muestra no llega otra durante la prueba, y las 1233 que faltan
+     * para 1234 se le envían al control directamente, como si vinieran del
+     * Muestreador.
+     */
+    private static void verificarTextoDelControl() throws Exception {
+        List<String> armados = List.of(
+                ControlMuestreo.textoEstado(true, true, 10, 1),
+                ControlMuestreo.textoEstado(true, true, 10, 1_234),
+                ControlMuestreo.textoEstado(true, true, 10, 9_999_999),
+                ControlMuestreo.textoEstado(false, true, 10, 1_234),
+                ControlMuestreo.textoEstado(false, false, 10, 1_234));
+        verificar("El texto dice el estado, el tiempo de muestreo y la cantidad de muestras, con los miles "
+                        + "separados por punto: \"● Muestreando · cada 10 ms · 1.234 muestras\", \"... 9.999.999 "
+                        + "muestras\" y \"... 1 muestra\"; \"Detenido · cada 10 ms\" y \"Sin conexión con la "
+                        + "fuente de datos\" siguen igual",
+                armados.equals(List.of(
+                        "● Muestreando · cada 10 ms · 1 muestra",
+                        "● Muestreando · cada 10 ms · 1.234 muestras",
+                        "● Muestreando · cada 10 ms · 9.999.999 muestras",
+                        "Detenido · cada 10 ms",
+                        "Sin conexión con la fuente de datos")),
+                "arma " + armados);
+
+        FuenteDePrueba fuente = fuenteConectada();
+        Muestreador muestreador = new Muestreador(fuente, Muestreador.PERIODO_MAX_MS);
+        MuestreoDePrueba m = enSwing(() -> {
+            BarraEstado barra = new BarraEstado();
+            PanelMuestreo panel = new PanelMuestreo();
+            return new MuestreoDePrueba(barra, panel, new ControlMuestreo(muestreador, barra, panel, null));
+        });
+        // Se registra después del control: cada muestra le llega primero a él
+        AtomicInteger reales = new AtomicInteger();
+        muestreador.agregarOyente(muestra -> reales.incrementAndGet());
+
+        List<String> vistos = new ArrayList<>();
+        vistos.add(enSwing(() -> m.barra().getLblEstado().getText()));
+        // Justo después del clic el texto puede decir 0 o 1 muestras, según
+        // si la primera ya llegó: no se revisa. Se espera a la primera.
+        enSwing(() -> {
+            m.barra().getBtnIniciar().doClick(0);
+            return null;
+        });
+        boolean llego = esperarMuestras(reales, 1);
+        vistos.add(enSwing(() -> m.barra().getLblEstado().getText()));
+        Muestra otra = muestra(0);
+        for (int i = 1; i < 1_234; i++) {
+            m.control().muestraRecibida(otra);
+        }
+        vistos.add(enSwing(() -> m.barra().getLblEstado().getText()));
+        int realesAlFinal = reales.get();
+        vistos.add(enSwing(() -> {
+            m.barra().getBtnDetener().doClick(0);
+            return m.barra().getLblEstado().getText();
+        }));
+        vistos.add(enSwing(() -> {
+            m.control().setHabilitado(false);
+            return m.barra().getLblEstado().getText();
+        }));
+        verificar("La barra del ControlMuestreo real muestra esos textos: detenido, \"1 muestra\" tras la primera, "
+                        + "\"1.234 muestras\" tras 1234, detenido otra vez y sin conexión",
+                llego && realesAlFinal == 1 && vistos.equals(List.of(
+                        "Detenido · cada 10000 ms",
+                        "● Muestreando · cada 10000 ms · 1 muestra",
+                        "● Muestreando · cada 10000 ms · 1.234 muestras",
+                        "Detenido · cada 10000 ms",
+                        "Sin conexión con la fuente de datos")),
+                (llego ? "" : "no llegó la primera muestra; ") + "muestras reales: " + realesAlFinal
+                        + "; textos: " + vistos);
+    }
+
+    private static void verificarLedsAlCrear() throws Exception {
+        SalidasDePrueba s = crearSalidas(fuenteConectada());
+        FotoSalidas foto = enSwing(() -> fotoSalidas(s));
+        verificar("Al crear ControlSalidas, los 4 LEDs están apagados, como sus etiquetas, y la ayuda emergente de "
+                        + "cada uno dice su estado (\"Salida 0: apagada\" a \"Salida 3: apagada\")",
+                ledsDicen(foto, false, false, false, false) && ledsSiguenEtiquetas(foto), describir(foto));
+
+        // Con el interruptor 1 ya pulsado antes de crear el control, como en I7LV-21 e I7LV-22
+        FuenteDePrueba otra = fuenteConectada();
+        SalidasDePrueba preparada = enSwing(() -> {
+            PanelSalidas panel = new PanelSalidas();
+            panel.getInterruptores()[1].setSelected(true);
+            return new SalidasDePrueba(otra, panel);
+        });
+        FotoSalidas fotoPreparada = enSwing(() -> fotoSalidas(preparada));
+        verificar("Con el interruptor 1 ya pulsado al crear el control, su LED se enciende al enviar el estado "
+                        + "inicial, junto con la etiqueta (\"Salida 1: encendida\"); los otros 3 quedan apagados",
+                ledsDicen(fotoPreparada, false, true, false, false) && ledsSiguenEtiquetas(fotoPreparada)
+                        && pantallaDice(fotoPreparada, false, true, false, false),
+                describir(fotoPreparada));
+
+        // Como cuando Main no puede conectar la fuente
+        SalidasDePrueba desconectada = crearSalidas(new FuenteDePrueba());
+        FotoSalidas fotoDesconectada = enSwing(() -> fotoSalidas(desconectada));
+        verificar("Si el estado inicial no se puede enviar (fuente sin conectar), los LEDs no cambian: siguen "
+                        + "apagados, como las etiquetas, y cada uno tiene su ayuda emergente",
+                ledsDicen(fotoDesconectada, false, false, false, false) && ledsSiguenEtiquetas(fotoDesconectada),
+                describir(fotoDesconectada));
+    }
+
+    private static void verificarLedsSiguenEscrituras() throws Exception {
+        SalidasDePrueba s = crearSalidas(fuenteConectada());
+        FotoSalidas antes = enSwing(() -> fotoSalidas(s));
+        FotoSalidas encendida = pulsar(s, 2);
+        verificar("Tras una escritura aceptada que enciende la salida 2, su LED se enciende en la misma tarea de "
+                        + "Swing que la etiqueta y su ayuda dice \"Salida 2: encendida\"; los LEDs de las demás no "
+                        + "cambian",
+                ledsDicen(encendida, false, false, true, false) && mismosLedsSalvo(antes, encendida, 2)
+                        && ledsSiguenEtiquetas(encendida),
+                describir(encendida));
+
+        pulsar(s, 0);
+        FotoSalidas conTres = pulsar(s, 3);
+        FotoSalidas apagada = pulsar(s, 2);
+        verificar("Al apagar la salida 2, su LED se apaga (\"Salida 2: apagada\") y los de la 0 y la 3 siguen "
+                        + "encendidos",
+                ledsDicen(conTres, true, false, true, true) && ledsDicen(apagada, true, false, false, true)
+                        && mismosLedsSalvo(conTres, apagada, 2) && ledsSiguenEtiquetas(apagada),
+                "antes: " + describir(conTres) + "; después: " + describir(apagada));
+    }
+
+    private static void verificarLedsConFalla() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        SalidasDePrueba s = crearSalidas(fuente);
+        pulsar(s, 3); // la 3 encendida, antes de que la fuente empiece a fallar
+        fuente.setFallar(true);
+
+        // Cada clic con la foto de antes y la de después en la misma tarea de Swing
+        List<FotoSalidas> encender = enSwing(() -> {
+            FotoSalidas previa = fotoSalidas(s);
+            s.panel.getInterruptores()[1].doClick(0);
+            return List.of(previa, fotoSalidas(s));
+        });
+        List<FotoSalidas> apagar = enSwing(() -> {
+            FotoSalidas previa = fotoSalidas(s);
+            s.panel.getInterruptores()[3].doClick(0);
+            return List.of(previa, fotoSalidas(s));
+        });
+        List<String> avisos = avisos(s);
+        verificar("Con la fuente configurada para fallar, el LED no cambia: al intentar encender la 1 sigue apagado "
+                        + "y al intentar apagar la 3 sigue encendido, con la misma ayuda emergente (y hubo 2 avisos)",
+                mismosLeds(encender.get(0), encender.get(1)) && mismosLeds(apagar.get(0), apagar.get(1))
+                        && ledsDicen(apagar.get(1), false, false, false, true) && avisos.size() == 2,
+                "encender la 1: " + describir(encender.get(1)) + "; apagar la 3: " + describir(apagar.get(1))
+                        + "; avisos: " + avisos);
+    }
+
+    /**
+     * LedIndicador creado con el constructor sin parámetros, como lo crea el
+     * diseñador de NetBeans, y dibujado en una imagen con fondo blanco, como
+     * lo dibuja Swing.
+     */
+    private static void verificarDibujoLed() throws Exception {
+        DibujoLed d = enSwing(() -> {
+            LedContado led = new LedContado();
+            Dimension tamano = led.getPreferredSize();
+            boolean alCrear = led.isEncendido();
+            boolean opaco = led.isOpaque();
+            BufferedImage apagado = dibujarLed(led);
+
+            int antes = led.redibujos;
+            led.setEncendido(true);
+            int alEncender = led.redibujos - antes;
+            BufferedImage encendido = dibujarLed(led);
+            antes = led.redibujos;
+            led.setEncendido(true);
+            int sinCambio = led.redibujos - antes;
+            antes = led.redibujos;
+            led.setEncendido(false);
+            int alApagar = led.redibujos - antes;
+
+            return new DibujoLed(tamano, alCrear, opaco,
+                    centro(encendido), centro(apagado), bordeSuperior(encendido), bordeSuperior(apagado),
+                    brillo(encendido), brillo(apagado), List.of(alEncender, sinCambio, alApagar));
+        });
+        verificar("LedIndicador con el constructor sin parámetros (el que usa el diseñador de NetBeans): mide "
+                        + "20 × 20 px, empieza apagado y es transparente alrededor del círculo",
+                d.tamano().equals(new Dimension(20, 20)) && !d.encendidoAlCrear() && !d.opaco(),
+                "mide " + d.tamano().width + " × " + d.tamano().height + ", encendido " + d.encendidoAlCrear()
+                        + ", opaco " + d.opaco());
+        verificar(String.format("LedIndicador dibujado en una imagen: el centro es el rojo de Tema encendido y gris "
+                                + "claro (Tema.GRIS_BORDE) apagado, con contorno negro en los dos; encendido tiene "
+                                + "brillo (%d píxeles más claros que el rojo cerca del centro) y apagado no",
+                        d.brilloEncendido()),
+                d.centroEncendido().equals(Tema.ROJO) && d.centroApagado().equals(Tema.GRIS_BORDE)
+                        && esNegro(d.bordeEncendido().getRGB()) && esNegro(d.bordeApagado().getRGB())
+                        && d.brilloEncendido() > 0 && d.brilloApagado() == 0,
+                "centro encendido " + rgb(d.centroEncendido()) + ", apagado " + rgb(d.centroApagado())
+                        + "; borde de arriba encendido " + rgb(d.bordeEncendido()) + ", apagado "
+                        + rgb(d.bordeApagado()) + "; píxeles de brillo encendido " + d.brilloEncendido()
+                        + ", apagado " + d.brilloApagado());
+        verificar("setEncendido() lo redibuja solo: pide un redibujo al encenderlo y otro al apagarlo, y ninguno si "
+                        + "el estado no cambia",
+                d.redibujos().equals(List.of(1, 0, 1)),
+                "redibujos al encender, al volver a encender y al apagar: " + d.redibujos());
+    }
+
+    // ===================== Utilidades de I7LV-18 fase A =====================
+
+    /**
+     * La barra de estado con un texto: lo que Swing dejaría ver (el texto, o
+     * el texto recortado con "..."), cuánto mide y dónde quedó cada parte,
+     * con la ventana de ese tamaño.
+     */
+    private record MedidaBarra(String texto, String visible, int anchoTexto, int anchoDisponible,
+                               Rectangle etiqueta, Rectangle botones, int anchoBarra,
+                               int anchoVentana, int altoVentana) {
+
+        /** Si se ve todo el texto y la etiqueta queda a la derecha de los botones, sin tocarlos. */
+        boolean completo() {
+            return visible.equals(texto) && anchoTexto <= anchoDisponible
+                    && etiqueta.x >= botones.x + botones.width;
+        }
+
+        @Override
+        public String toString() {
+            return "\"" + texto + "\" se ve \"" + visible + "\" (" + anchoTexto + " px de " + anchoDisponible + ")";
+        }
+    }
+
+    /** Lo que se midió al dibujar un LedIndicador. */
+    private record DibujoLed(Dimension tamano, boolean encendidoAlCrear, boolean opaco,
+                             Color centroEncendido, Color centroApagado,
+                             Color bordeEncendido, Color bordeApagado,
+                             int brilloEncendido, int brilloApagado, List<Integer> redibujos) {
+    }
+
+    /** LedIndicador que cuenta los pedidos de redibujo. Solo se usa en el hilo de Swing. */
+    private static final class LedContado extends LedIndicador {
+
+        int redibujos = 0;
+
+        @Override
+        public void repaint(long tm, int x, int y, int width, int height) {
+            redibujos++;
+            super.repaint(tm, x, y, width, height);
+        }
+    }
+
+    /**
+     * Pone la ventana en ese tamaño, escribe cada texto en la etiqueta de la
+     * barra y mide. validate() hace lo que Swing haría antes de dibujar la
+     * ventana visible. Se llama en el hilo de Swing.
+     */
+    private static List<MedidaBarra> medirBarra(VentanaPrincipal ventana, Dimension tamano, List<String> textos) {
+        ventana.setSize(tamano);
+        BarraEstado barra = ventana.getBarraEstado();
+        JLabel etiqueta = barra.getLblEstado();
+        Container botones = barra.getBtnIniciar().getParent();
+        List<MedidaBarra> medidas = new ArrayList<>();
+        for (String texto : textos) {
+            etiqueta.setText(texto);
+            ventana.validate();
+            Insets bordes = etiqueta.getInsets();
+            Rectangle vista = new Rectangle(bordes.left, bordes.top,
+                    etiqueta.getWidth() - bordes.left - bordes.right,
+                    etiqueta.getHeight() - bordes.top - bordes.bottom);
+            FontMetrics medidasFuente = etiqueta.getFontMetrics(etiqueta.getFont());
+            String visible = SwingUtilities.layoutCompoundLabel(etiqueta, medidasFuente, texto, null,
+                    etiqueta.getVerticalAlignment(), etiqueta.getHorizontalAlignment(),
+                    etiqueta.getVerticalTextPosition(), etiqueta.getHorizontalTextPosition(),
+                    vista, new Rectangle(), new Rectangle(), etiqueta.getIconTextGap());
+            medidas.add(new MedidaBarra(texto, visible, medidasFuente.stringWidth(texto), vista.width,
+                    etiqueta.getBounds(), botones.getBounds(), barra.getWidth(),
+                    ventana.getWidth(), ventana.getHeight()));
+        }
+        return medidas;
+    }
+
+    /**
+     * Si los LEDs muestran esas salidas encendidas y las demás apagadas, cada
+     * uno con su ayuda emergente: "Salida i: encendida" o "Salida i: apagada".
+     */
+    private static boolean ledsDicen(FotoSalidas f, boolean... encendidos) {
+        for (int i = 0; i < encendidos.length; i++) {
+            String ayuda = "Salida " + i + ": " + (encendidos[i] ? "encendida" : "apagada");
+            if (f.leds().get(i) != encendidos[i] || !ayuda.equals(f.ayudas().get(i))) {
+                return false;
+            }
+        }
+        return f.leds().size() == encendidos.length;
+    }
+
+    /** Si el LED de cada salida está encendido exactamente cuando su etiqueta dice "Encendida". */
+    private static boolean ledsSiguenEtiquetas(FotoSalidas f) {
+        for (int i = 0; i < f.leds().size(); i++) {
+            if (f.leds().get(i) != f.textos().get(i).equals("Encendida")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Si los LEDs y sus ayudas son los mismos en las dos fotos. */
+    private static boolean mismosLeds(FotoSalidas a, FotoSalidas b) {
+        return a.leds().equals(b.leds()) && a.ayudas().equals(b.ayudas());
+    }
+
+    /** Si los LEDs y sus ayudas son los mismos en las dos fotos, salvo el de esa salida. */
+    private static boolean mismosLedsSalvo(FotoSalidas a, FotoSalidas b, int salida) {
+        for (int i = 0; i < a.leds().size(); i++) {
+            if (i != salida && (!a.leds().get(i).equals(b.leds().get(i))
+                    || !a.ayudas().get(i).equals(b.ayudas().get(i)))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Dibuja el LED en su tamaño preferido sobre un fondo blanco. Se llama en el hilo de Swing. */
+    private static BufferedImage dibujarLed(LedIndicador led) {
+        led.setSize(led.getPreferredSize());
+        BufferedImage imagen = new BufferedImage(led.getWidth(), led.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = imagen.createGraphics();
+        g.setColor(Tema.BLANCO);
+        g.fillRect(0, 0, imagen.getWidth(), imagen.getHeight());
+        led.paint(g);
+        g.dispose();
+        return imagen;
+    }
+
+    private static Color centro(BufferedImage imagen) {
+        return new Color(imagen.getRGB(imagen.getWidth() / 2, imagen.getHeight() / 2));
+    }
+
+    /** El píxel de arriba en el medio: ahí pasa el contorno del círculo. */
+    private static Color bordeSuperior(BufferedImage imagen) {
+        return new Color(imagen.getRGB(imagen.getWidth() / 2, 0));
+    }
+
+    /**
+     * Píxeles más claros que el rojo de Tema (rojo al menos igual, verde y
+     * azul de 60 o más) a menos de 7 px del centro, lejos del contorno, cuyo
+     * suavizado deja grises claros sobre el fondo blanco.
+     */
+    private static int brillo(BufferedImage imagen) {
+        int cx = imagen.getWidth() / 2;
+        int cy = imagen.getHeight() / 2;
+        int cuenta = 0;
+        for (int y = 0; y < imagen.getHeight(); y++) {
+            for (int x = 0; x < imagen.getWidth(); x++) {
+                Color c = new Color(imagen.getRGB(x, y));
+                boolean cerca = (x - cx) * (x - cx) + (y - cy) * (y - cy) < 7 * 7;
+                if (cerca && c.getRed() >= Tema.ROJO.getRed() && c.getGreen() >= 60 && c.getBlue() >= 60) {
+                    cuenta++;
+                }
+            }
+        }
+        return cuenta;
+    }
+
+    private static String rgb(Color c) {
+        return "RGB " + c.getRed() + ", " + c.getGreen() + ", " + c.getBlue();
     }
 
     // ===================== Utilidades =====================

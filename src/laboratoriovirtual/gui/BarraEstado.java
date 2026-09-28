@@ -7,6 +7,11 @@ import javax.swing.JLabel;
  * Franja inferior fija de la ventana: botones para iniciar y detener el
  * muestreo y un texto con su estado.
  *
+ * El texto ocupa todo el ancho que dejan los botones (centro del
+ * BorderLayout) y va alineado a la derecha. Así su ancho depende solo del de
+ * la ventana: no cambia cuando el texto crece, por ejemplo con el contador
+ * de muestras, y no mueve nada.
+ *
  * Diseñada con el editor visual de NetBeans (BarraEstado.form). No tiene
  * lógica: el controlador correspondiente usa los métodos get.
  */
@@ -51,8 +56,9 @@ public class BarraEstado extends javax.swing.JPanel {
         add(panelBotones, java.awt.BorderLayout.WEST);
 
         lblEstado.setFont(new java.awt.Font("SansSerif", 0, 13)); // NOI18N
+        lblEstado.setHorizontalAlignment(javax.swing.SwingConstants.RIGHT);
         lblEstado.setText("Detenido · cada 500 ms");
-        add(lblEstado, java.awt.BorderLayout.EAST);
+        add(lblEstado, java.awt.BorderLayout.CENTER);
     }// </editor-fold>//GEN-END:initComponents
 
     /** Botón que inicia el muestreo. */

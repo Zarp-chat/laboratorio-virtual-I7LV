@@ -33,7 +33,7 @@ public final class Tema {
     /** Negro, RGB 0, 0, 0. Textos y bordes. */
     public static final Color NEGRO = new Color(0, 0, 0);
 
-    /** Gris de bordes, RGB 180, 180, 180. Borde de la gráfica, de los formularios y línea sobre el botón Guardar. */
+    /** Gris de bordes, RGB 180, 180, 180. Borde de la gráfica, de los formularios, línea sobre el botón Guardar y relleno del LED apagado (LedIndicador). */
     public static final Color GRIS_BORDE = new Color(180, 180, 180);
 
     /** Gris de fondo secundario, RGB 245, 245, 245. Fondo de las pestañas y de su contenido. */

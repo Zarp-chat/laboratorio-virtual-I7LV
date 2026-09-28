@@ -6,6 +6,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JToggleButton;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.datos.FuenteDeDatosException;
+import laboratoriovirtual.gui.LedIndicador;
 import laboratoriovirtual.gui.PanelSalidas;
 import laboratoriovirtual.gui.Tema;
 
@@ -14,8 +15,11 @@ import laboratoriovirtual.gui.Tema;
  *
  * Cada interruptor enciende o apaga su salida con fuente.escribirSalida().
  * La etiqueta de al lado dice el último estado que la fuente aceptó:
- * "Encendida" en rojo o "Apagada" en negro. Si la fuente rechaza la
- * escritura, el interruptor vuelve a como estaba y se avisa.
+ * "Encendida" en rojo o "Apagada" en negro. El LED de la izquierda
+ * (I7LV-18) cambia junto con la etiqueta, nunca por su cuenta, y su ayuda
+ * emergente dice su estado, por ejemplo "Salida 2: encendida". Si la fuente
+ * rechaza la escritura, el interruptor vuelve a como estaba, la etiqueta y
+ * el LED no cambian y se avisa.
  *
  * Solo habla con la interfaz FuenteDeDatos, así que funciona igual con la
  * fuente aleatoria y con el puerto serie. No depende del muestreo: las
@@ -37,6 +41,7 @@ public class ControlSalidas {
     // Componentes de la pestaña Salidas: la posición i corresponde a la salida i
     private final JToggleButton[] interruptores;
     private final JLabel[] estados;
+    private final LedIndicador[] leds;
 
     /**
      * Conecta los interruptores con la fuente y le envía el estado que
@@ -53,12 +58,21 @@ public class ControlSalidas {
         this.ventana = ventana;
         interruptores = panel.getInterruptores();
         estados = panel.getEstados();
+        leds = panel.getLeds();
 
         if (interruptores.length != FuenteDeDatos.NUM_SALIDAS_DIGITALES
-                || estados.length != FuenteDeDatos.NUM_SALIDAS_DIGITALES) {
+                || estados.length != FuenteDeDatos.NUM_SALIDAS_DIGITALES
+                || leds.length != FuenteDeDatos.NUM_SALIDAS_DIGITALES) {
             throw new IllegalArgumentException("La pestaña debe tener "
-                    + FuenteDeDatos.NUM_SALIDAS_DIGITALES + " interruptores y "
-                    + FuenteDeDatos.NUM_SALIDAS_DIGITALES + " etiquetas de estado");
+                    + FuenteDeDatos.NUM_SALIDAS_DIGITALES + " interruptores, "
+                    + FuenteDeDatos.NUM_SALIDAS_DIGITALES + " etiquetas de estado y "
+                    + FuenteDeDatos.NUM_SALIDAS_DIGITALES + " LEDs");
+        }
+
+        // La ayuda emergente de cada LED dice lo que muestra desde el
+        // comienzo, también si el estado inicial no se puede enviar.
+        for (int i = 0; i < leds.length; i++) {
+            ponerAyudaLed(i);
         }
 
         // ActionEvent solo lo producen el clic y el teclado, no setSelected().
@@ -107,7 +121,7 @@ public class ControlSalidas {
 
     /**
      * Envía a la fuente el estado de cada interruptor y lo muestra en su
-     * etiqueta. Si la fuente no lo acepta (por ejemplo, porque no se pudo
+     * etiqueta y en su LED. Si la fuente no lo acepta (por ejemplo, porque no se pudo
      * conectar), los interruptores quedan deshabilitados: la pantalla podría
      * no coincidir con las salidas reales. No se avisa aquí porque el aviso
      * de la conexión lo da quien conecta la fuente (Main).
@@ -124,10 +138,22 @@ public class ControlSalidas {
         }
     }
 
-    /** Pone en la etiqueta de la salida su estado: "Encendida" en rojo o "Apagada" en negro. */
+    /**
+     * Muestra el estado de la salida: la etiqueta dice "Encendida" en rojo o
+     * "Apagada" en negro, y el LED se enciende o se apaga. Es el único lugar
+     * que cambia el LED: así siempre coincide con la etiqueta.
+     */
     private void mostrarEstado(int salida, boolean encendida) {
         estados[salida].setText(encendida ? "Encendida" : "Apagada");
         estados[salida].setForeground(encendida ? Tema.ROJO : Tema.NEGRO);
+        leds[salida].setEncendido(encendida);
+        ponerAyudaLed(salida);
+    }
+
+    /** Pone en la ayuda emergente del LED lo que muestra, por ejemplo "Salida 2: encendida". */
+    private void ponerAyudaLed(int salida) {
+        leds[salida].setToolTipText("Salida " + salida + ": "
+                + (leds[salida].isEncendido() ? "encendida" : "apagada"));
     }
 
     /**

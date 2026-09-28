@@ -1,6 +1,7 @@
 package laboratoriovirtual.control;
 
 import java.awt.Component;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.swing.JButton;
 import javax.swing.JLabel;
@@ -29,6 +30,13 @@ import laboratoriovirtual.muestreo.OyenteMuestras;
  * Por eso se pueden pulsar varias veces seguidas sin reconectar.
  */
 public class ControlMuestreo implements OyenteMuestras {
+
+    /**
+     * Formato regional de Colombia para el contador de muestras: separa los
+     * miles con punto (12.345). Es fijo, no el del equipo, para que el texto
+     * sea el mismo en cualquier computador.
+     */
+    private static final Locale FORMATO_REGIONAL = Locale.of("es", "CO");
 
     private final Muestreador muestreador;
     private final Component ventana; // para centrar los mensajes de aviso
@@ -179,14 +187,36 @@ public class ControlMuestreo implements OyenteMuestras {
         btnAplicar.setEnabled(habilitado);
 
         lblTiempoActual.setText(periodo + " ms");
+        lblEstado.setText(textoEstado(corriendo, habilitado, periodo, muestrasRecibidas.get()));
+    }
 
+    /**
+     * Texto de la barra de estado en cada uno de sus tres estados:
+     * - muestreando: "● Muestreando · cada 10 ms · 12.345 muestras";
+     * - detenido: "Detenido · cada 10 ms";
+     * - sin fuente conectada: "Sin conexión con la fuente de datos".
+     * El tiempo de muestreo va sin separador de miles, igual que en la
+     * pestaña Muestreo y en su campo, que no acepta puntos.
+     *
+     * Es público y estático para que VerificacionSprint2 compruebe que el
+     * texto más largo posible cabe en la barra, sin tener que recibir
+     * millones de muestras.
+     *
+     * @param corriendo  si el muestreo está corriendo
+     * @param habilitado si la fuente está conectada (ver setHabilitado)
+     * @param periodoMs  tiempo de muestreo actual
+     * @param muestras   muestras recibidas desde el último Iniciar
+     * @return el texto que va en la barra
+     */
+    public static String textoEstado(boolean corriendo, boolean habilitado, int periodoMs, long muestras) {
         if (corriendo) {
-            lblEstado.setText("● Muestreando · cada " + periodo + " ms · "
-                    + muestrasRecibidas.get() + " muestras");
+            return "● Muestreando · cada " + periodoMs + " ms · "
+                    + String.format(FORMATO_REGIONAL, "%,d", muestras)
+                    + (muestras == 1 ? " muestra" : " muestras");
         } else if (habilitado) {
-            lblEstado.setText("Detenido · cada " + periodo + " ms");
+            return "Detenido · cada " + periodoMs + " ms";
         } else {
-            lblEstado.setText("Sin conexión con la fuente de datos");
+            return "Sin conexión con la fuente de datos";
         }
     }
 

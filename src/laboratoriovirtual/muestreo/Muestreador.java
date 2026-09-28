@@ -10,6 +10,12 @@ import laboratoriovirtual.datos.FuenteDeDatosException;
  *
  * Cada periodo lee todas las entradas, arma una Muestra y la reparte
  * a los oyentes registrados. No sabe nada de Swing ni de archivos.
+ *
+ * No conecta ni desconecta la fuente (I7LV-21, I7LV-22): iniciar() y
+ * detener() solo arrancan y detienen la lectura periódica. La fuente la
+ * conecta quien la crea (Main en el Laboratorio 1; la pestaña Conexión en
+ * el Laboratorio 2) antes del primer iniciar(). Así las salidas digitales se
+ * pueden usar con el muestreo detenido y conservan su estado al detenerlo.
  */
 public class Muestreador {
 
@@ -63,12 +69,14 @@ public class Muestreador {
         return corriendo;
     }
 
-    /** Inicia la fuente y arranca el hilo de muestreo. El tiempo vuelve a cero. */
+    /**
+     * Arranca el hilo de muestreo. El tiempo vuelve a cero. La fuente ya debe
+     * estar conectada: aquí solo se le informa el tiempo de muestreo.
+     */
     public synchronized void iniciar() throws FuenteDeDatosException {
         if (corriendo) {
             return;
         }
-        fuente.iniciar();
         fuente.fijarTiempoMuestreo(periodoMs);
         corriendo = true;
         inicioNanos = System.nanoTime();
@@ -77,7 +85,10 @@ public class Muestreador {
         hilo.start();
     }
 
-    /** Detiene el hilo de muestreo y libera la fuente. */
+    /**
+     * Detiene el hilo de muestreo. La fuente sigue conectada y las salidas
+     * quedan como estaban.
+     */
     public synchronized void detener() {
         corriendo = false;
         if (hilo != null) {
@@ -89,7 +100,6 @@ public class Muestreador {
             }
             hilo = null;
         }
-        fuente.detener();
     }
 
     private void bucleDeMuestreo() {

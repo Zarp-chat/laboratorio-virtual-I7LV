@@ -23,6 +23,10 @@ import laboratoriovirtual.muestreo.OyenteMuestras;
  *
  * Solo habla con el Muestreador. No sabe de dónde vienen los datos,
  * así que funciona igual con la fuente aleatoria y con el puerto serie.
+ *
+ * Iniciar y Detener solo arrancan y detienen la lectura periódica: no
+ * conectan ni desconectan la fuente (eso lo hace Main en el Laboratorio 1).
+ * Por eso se pueden pulsar varias veces seguidas sin reconectar.
  */
 public class ControlMuestreo implements OyenteMuestras {
 
@@ -43,6 +47,10 @@ public class ControlMuestreo implements OyenteMuestras {
     // Cuenta las muestras desde el último Iniciar. Es atómica porque la
     // incrementa el hilo de muestreo y la lee el hilo de la interfaz.
     private final AtomicLong muestrasRecibidas = new AtomicLong();
+
+    // Falso si la fuente no está conectada: Iniciar y el cambio de tiempo
+    // la usan, así que quedan deshabilitados (ver setHabilitado).
+    private boolean habilitado = true;
 
     public ControlMuestreo(Muestreador muestreador, BarraEstado barra,
                            PanelMuestreo panel, Component ventana) {
@@ -74,6 +82,18 @@ public class ControlMuestreo implements OyenteMuestras {
         // Recibir aviso de cada muestra, para mostrar que el sistema está vivo
         muestreador.agregarOyente(this);
 
+        actualizarPantalla();
+    }
+
+    /**
+     * Habilita o deshabilita los controles que usan la fuente: Iniciar y el
+     * cambio del tiempo de muestreo. Main los deshabilita si no pudo conectar
+     * la fuente; en el Laboratorio 2 lo hará la pestaña Conexión al abrir y
+     * cerrar el puerto serie. Detener sigue disponible mientras el muestreo
+     * esté corriendo. Se llama en el hilo de Swing.
+     */
+    public void setHabilitado(boolean habilitado) {
+        this.habilitado = habilitado;
         actualizarPantalla();
     }
 
@@ -153,16 +173,20 @@ public class ControlMuestreo implements OyenteMuestras {
         int periodo = muestreador.getPeriodoMs();
 
         // Solo se puede pulsar el botón que tiene sentido en cada momento
-        btnIniciar.setEnabled(!corriendo);
+        btnIniciar.setEnabled(habilitado && !corriendo);
         btnDetener.setEnabled(corriendo);
+        txtNuevoTiempo.setEnabled(habilitado);
+        btnAplicar.setEnabled(habilitado);
 
         lblTiempoActual.setText(periodo + " ms");
 
         if (corriendo) {
             lblEstado.setText("● Muestreando · cada " + periodo + " ms · "
                     + muestrasRecibidas.get() + " muestras");
-        } else {
+        } else if (habilitado) {
             lblEstado.setText("Detenido · cada " + periodo + " ms");
+        } else {
+            lblEstado.setText("Sin conexión con la fuente de datos");
         }
     }
 

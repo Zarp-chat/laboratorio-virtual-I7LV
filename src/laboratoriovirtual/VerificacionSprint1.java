@@ -176,6 +176,9 @@ public class VerificacionSprint1 {
         verificar("Arranca con el tiempo pedido (100 ms)",
                 muestreador.getPeriodoMs() == 100, "tiene " + muestreador.getPeriodoMs() + " ms");
 
+        // El Muestreador no conecta la fuente (I7LV-21, I7LV-22): se conecta antes
+        fuente.iniciar();
+
         // Periodo de 100 ms
         muestreador.iniciar();
         Thread.sleep(2050);
@@ -223,6 +226,19 @@ public class VerificacionSprint1 {
         verificar("Al detener, dejan de llegar muestras",
                 !muestreador.estaCorriendo() && despues == alDetener,
                 "llegaron " + (despues - alDetener) + " muestras después de detener");
+
+        boolean sigueConectada = true;
+        String motivo = "";
+        try {
+            fuente.leerAnalogicas();
+        } catch (FuenteDeDatosException e) {
+            sigueConectada = false;
+            motivo = e.getMessage();
+        }
+        verificar("Detener el muestreo no desconecta la fuente",
+                sigueConectada, "la fuente ya no entrega datos: " + motivo);
+
+        fuente.detener();
     }
 
     // ===================== Utilidades =====================

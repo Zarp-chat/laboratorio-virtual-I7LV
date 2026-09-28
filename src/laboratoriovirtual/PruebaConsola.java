@@ -23,6 +23,8 @@ public class PruebaConsola {
                 m.getTiempo(), m.getAnalogica(0), m.getAnalogica(7),
                 m.getDigital(0) ? 1 : 0, m.getDigital(3) ? 1 : 0));
 
+        // El Muestreador no conecta la fuente: se conecta antes de iniciarlo
+        fuente.iniciar();
         muestreador.iniciar();
         System.out.println("--- Periodo: " + muestreador.getPeriodoMs() + " ms");
         Thread.sleep(2600);
@@ -33,6 +35,7 @@ public class PruebaConsola {
         Thread.sleep(1100);
 
         muestreador.detener();
+        fuente.detener();
         System.out.println("--- Muestreo detenido");
     }
 }

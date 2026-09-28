@@ -2,13 +2,16 @@ package laboratoriovirtual;
 
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import laboratoriovirtual.control.ControlMuestreo;
+import laboratoriovirtual.control.ControlSalidas;
 import laboratoriovirtual.control.ControlSeleccion;
 import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.control.GraficaDigital;
 import laboratoriovirtual.datos.FuenteAleatoria;
 import laboratoriovirtual.datos.FuenteDeDatos;
+import laboratoriovirtual.datos.FuenteDeDatosException;
 import laboratoriovirtual.gui.Tema;
 import laboratoriovirtual.gui.VentanaPrincipal;
 import laboratoriovirtual.muestreo.Muestreador;
@@ -32,11 +35,34 @@ public class Main {
 
             VentanaPrincipal ventana = new VentanaPrincipal();
 
+            // Conectar la fuente antes de crear los controladores:
+            // ControlSalidas le envía el estado inicial de las salidas.
+            // Conexión y muestreo van por separado: la fuente queda conectada
+            // hasta cerrar la ventana, e Iniciar y Detener solo arrancan y
+            // detienen la lectura periódica. Así las salidas funcionan con el
+            // muestreo detenido. En el Laboratorio 2 conectar y desconectar
+            // (abrir y cerrar el puerto serie) lo hará la pestaña Conexión.
+            FuenteDeDatosException errorAlConectar = null;
+            try {
+                fuente.iniciar();
+            } catch (FuenteDeDatosException e) {
+                errorAlConectar = e;
+            }
+            boolean conectada = errorAlConectar == null;
+
             // Controladores: cada uno maneja una parte de la ventana.
-            // En tareas siguientes se agregan aquí ControlSalidas y
-            // ControlGuardado.
-            new ControlMuestreo(muestreador, ventana.getBarraEstado(),
-                    ventana.getPanelMuestreo(), ventana);
+            // En una tarea siguiente se agrega aquí ControlGuardado.
+            ControlMuestreo controlMuestreo = new ControlMuestreo(muestreador,
+                    ventana.getBarraEstado(), ventana.getPanelMuestreo(), ventana);
+            ControlSalidas controlSalidas = new ControlSalidas(fuente,
+                    ventana.getPanelSalidas(), ventana);
+
+            // Sin fuente conectada no se puede muestrear ni cambiar el tiempo
+            // de muestreo ni las salidas. El resto de la ventana sigue igual.
+            if (!conectada) {
+                controlMuestreo.setHabilitado(false);
+                controlSalidas.setHabilitado(false);
+            }
 
             // Gráfica en vivo de la pestaña "Señal analógica". Arranca en el
             // canal 0 (A0) y el selector de la pestaña la cambia de canal.
@@ -58,17 +84,31 @@ public class Main {
             new ControlSeleccion(ventana.getPanelDigital().getComboCanal(),
                     graficaDigital);
 
-            // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
+            // Al cerrar la ventana: primero se detiene el muestreo, para que
+            // no lea una fuente desconectada, y luego se desconecta la fuente.
             // En el Laboratorio 2 esto cierra el puerto serie.
             ventana.addWindowListener(new WindowAdapter() {
                 @Override
                 public void windowClosing(WindowEvent e) {
                     muestreador.detener();
+                    if (conectada) {
+                        fuente.detener();
+                    }
                 }
             });
 
             ventana.setLocationRelativeTo(null);
             ventana.setVisible(true);
+
+            // El aviso va después de mostrar la ventana, para que aparezca
+            // sobre ella. La aplicación sigue abierta.
+            if (!conectada) {
+                JOptionPane.showMessageDialog(ventana,
+                        "No se pudo conectar con la fuente de datos:\n"
+                        + errorAlConectar.getMessage() + "\n\n"
+                        + "El muestreo y las salidas quedan deshabilitados.",
+                        "Fuente de datos", JOptionPane.WARNING_MESSAGE);
+            }
         });
     }
 }

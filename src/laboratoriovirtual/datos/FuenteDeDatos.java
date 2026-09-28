@@ -20,14 +20,22 @@ public interface FuenteDeDatos {
     int NUM_SALIDAS_DIGITALES = 4;
 
     /**
-     * Prepara la fuente para entregar datos.
-     * En el Laboratorio 2 aquí se abre el puerto serie.
+     * Conecta la fuente. Desde ese momento se pueden leer las entradas y
+     * escribir las salidas.
+     * Laboratorio 1: Main la conecta al arrancar el programa.
+     * Laboratorio 2: aquí se abre el puerto serie (desde la pestaña Conexión).
+     *
+     * No tiene que ver con el muestreo: Muestreador.iniciar() solo arranca la
+     * lectura periódica y necesita la fuente ya conectada.
      */
     void iniciar() throws FuenteDeDatosException;
 
     /**
-     * Libera los recursos de la fuente.
-     * En el Laboratorio 2 aquí se cierra el puerto serie.
+     * Desconecta la fuente y libera sus recursos.
+     * Laboratorio 1: Main la desconecta al cerrar la ventana.
+     * Laboratorio 2: aquí se cierra el puerto serie (desde la pestaña Conexión).
+     *
+     * Detener el muestreo (Muestreador.detener()) no la desconecta.
      */
     void detener();
 

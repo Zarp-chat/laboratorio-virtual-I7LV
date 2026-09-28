@@ -1,6 +1,7 @@
 package laboratoriovirtual;
 
 import java.awt.BasicStroke;
+import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Paint;
 import java.awt.Rectangle;
@@ -10,6 +11,8 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Queue;
 import java.util.Random;
@@ -22,8 +25,12 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntUnaryOperator;
 import java.util.function.Supplier;
 import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
 import laboratoriovirtual.control.CanalSeleccionable;
+import laboratoriovirtual.control.ControlMuestreo;
+import laboratoriovirtual.control.ControlSalidas;
 import laboratoriovirtual.control.ControlSeleccion;
 import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.control.GraficaDigital;
@@ -32,6 +39,10 @@ import laboratoriovirtual.control.RendererBus;
 import laboratoriovirtual.control.SenalesDigitalesEnVivo;
 import laboratoriovirtual.control.SerieEnVivo;
 import laboratoriovirtual.datos.FuenteDeDatos;
+import laboratoriovirtual.datos.FuenteDeDatosException;
+import laboratoriovirtual.gui.BarraEstado;
+import laboratoriovirtual.gui.PanelMuestreo;
+import laboratoriovirtual.gui.PanelSalidas;
 import laboratoriovirtual.gui.PanelSenal;
 import laboratoriovirtual.gui.Tema;
 import laboratoriovirtual.muestreo.Muestra;
@@ -48,8 +59,8 @@ import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
 /**
- * Verifica las tareas del Sprint 2 (I7LV-17, I7LV-16, I7LV-20 e I7LV-19)
- * sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
+ * Verifica las tareas del Sprint 2 (I7LV-17, I7LV-16, I7LV-20, I7LV-19,
+ * I7LV-21 e I7LV-22) sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
  * [OK] o [FALLA] por criterio, igual que VerificacionSprint1. Una excepción
  * no capturada, en cualquier hilo, se imprime completa y cuenta como FALLA;
  * el programa nunca se queda colgado por ella (ver main()).
@@ -82,6 +93,16 @@ import org.jfree.data.xy.XYSeriesCollection;
  * haría el usuario. Revisa la selección, el título, el historial entregado,
  * que no se borre nada, el color de los nombres de los carriles (también en
  * una imagen de la gráfica dibujada) y que la pestaña analógica siga igual.
+ *
+ * I7LV-21 e I7LV-22: usa el ControlSalidas real sobre un PanelSalidas que
+ * nunca se muestra, con una subclase que guarda los avisos en una lista en
+ * vez de abrir un cuadro de diálogo. La fuente es FuenteDePrueba, escrita
+ * aquí: registra cada escritura de una salida y se puede configurar para
+ * rechazarlas. Los interruptores y los botones se pulsan con doClick(), que
+ * produce los mismos avisos que un clic. Con un Muestreador real sobre esa
+ * fuente se revisa que conexión y muestreo vayan por separado: las salidas
+ * funcionan con el muestreo detenido, y detenerlo no las cambia ni
+ * desconecta la fuente.
  */
 public class VerificacionSprint2 {
 
@@ -199,7 +220,7 @@ public class VerificacionSprint2 {
         System.out.println("===================================");
         System.out.println("Resultado: " + aprobados + " aprobados, " + fallidos + " fallidos");
         System.out.println(fallidos == 0
-                ? "I7LV-17, I7LV-16, I7LV-20 e I7LV-19 cumplen sus criterios."
+                ? "I7LV-17, I7LV-16, I7LV-20, I7LV-19, I7LV-21 e I7LV-22 cumplen sus criterios."
                 : "Hay criterios sin cumplir: revisa las líneas [FALLA].");
         System.exit(fallidos == 0 ? 0 : 1);
     }
@@ -245,6 +266,17 @@ public class VerificacionSprint2 {
         verificarAnalogicaSigueIgual();
 
         revisarErroresEnOtrosHilos("I7LV-19");
+
+        titulo("I7LV-21 e I7LV-22  Encendido y apagado de las salidas digitales (control real, sin ventana)");
+
+        verificarSalidasAlCrear();
+        verificarPulsarInterruptor();
+        verificarEscrituraRechazada();
+        verificarSalidasConMuestreoDetenido();
+        verificarHabilitarSalidas();
+        verificarIniciarDetenerSinReconectar();
+
+        revisarErroresEnOtrosHilos("I7LV-21 e I7LV-22");
     }
 
     // ===================== Excepciones no capturadas =====================
@@ -2573,6 +2605,568 @@ public class VerificacionSprint2 {
             analogica.grafica().muestraRecibida(muestra);
             digital.grafica().muestraRecibida(muestra);
         }
+    }
+
+    // ===================== I7LV-21 e I7LV-22: salidas digitales =====================
+
+    private static void verificarSalidasAlCrear() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        SalidasDePrueba s = crearSalidas(fuente);
+        FotoSalidas foto = enSwing(() -> fotoSalidas(s));
+        verificar("Al crearse, ControlSalidas envía a la fuente las 4 salidas apagadas: una escritura por "
+                        + "salida, de la 0 a la 3, y la fuente las acepta",
+                porSalida(fuente.escrituras()).equals(escrituras(false, false, false, false)),
+                "escribió " + fuente.escrituras());
+        verificar("... y la pantalla empieza de acuerdo con la fuente: los 4 interruptores sin pulsar y "
+                        + "habilitados, y las 4 etiquetas dicen \"Apagada\" en negro",
+                pantallaDice(foto, false, false, false, false), describir(foto));
+
+        // Con el interruptor 1 ya pulsado antes de crear el control: así se ve
+        // que envía lo que muestra la pantalla y no siempre "apagada"
+        FuenteDePrueba otra = fuenteConectada();
+        SalidasDePrueba preparada = enSwing(() -> {
+            PanelSalidas panel = new PanelSalidas();
+            panel.getInterruptores()[1].setSelected(true);
+            return new SalidasDePrueba(otra, panel);
+        });
+        FotoSalidas fotoPreparada = enSwing(() -> fotoSalidas(preparada));
+        verificar("Envía lo que muestran los interruptores: con el 1 ya pulsado al crear el control, escribe "
+                        + "(1, encendida) y su etiqueta dice \"Encendida\" en rojo",
+                porSalida(otra.escrituras()).equals(escrituras(false, true, false, false))
+                        && pantallaDice(fotoPreparada, false, true, false, false),
+                "escribió " + otra.escrituras() + "; " + describir(fotoPreparada));
+
+        // Como cuando Main no puede conectar la fuente
+        FuenteDePrueba sinConectar = new FuenteDePrueba();
+        SalidasDePrueba desconectada = crearSalidas(sinConectar);
+        FotoSalidas fotoDesconectada = enSwing(() -> fotoSalidas(desconectada));
+        List<String> avisos = avisos(desconectada);
+        verificar("Si la fuente no está conectada al crearlo, los 4 interruptores quedan deshabilitados y el "
+                        + "control no abre un aviso propio (el de la conexión lo da Main)",
+                !fotoDesconectada.habilitados().contains(true) && avisos.isEmpty(),
+                describir(fotoDesconectada) + "; avisos: " + avisos);
+    }
+
+    private static void verificarPulsarInterruptor() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        SalidasDePrueba s = crearSalidas(fuente);
+
+        int desde = fuente.escrituras().size();
+        FotoSalidas encendida = pulsar(s, 2);
+        verificar("Pulsar el interruptor 2 escribe (2, encendida) en la fuente, una sola vez",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(2, true, true)))
+                        && Arrays.equals(fuente.salidas(), new boolean[]{false, false, true, false}),
+                "escribió " + escriturasDesde(fuente, desde));
+        verificar("... y su etiqueta dice \"Encendida\" en el rojo de Tema; las demás siguen \"Apagada\" en negro",
+                pantallaDice(encendida, false, false, true, false), describir(encendida));
+
+        desde = fuente.escrituras().size();
+        FotoSalidas apagada = pulsar(s, 2);
+        verificar("Volver a pulsarlo escribe (2, apagada), una sola vez, y la etiqueta vuelve a decir "
+                        + "\"Apagada\" en negro",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(2, false, true)))
+                        && Arrays.equals(fuente.salidas(), new boolean[4])
+                        && pantallaDice(apagada, false, false, false, false),
+                "escribió " + escriturasDesde(fuente, desde) + "; " + describir(apagada));
+        List<String> avisos = avisos(s);
+        verificar("Mientras la fuente acepta las escrituras no hay avisos", avisos.isEmpty(), "avisos: " + avisos);
+    }
+
+    private static void verificarEscrituraRechazada() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        SalidasDePrueba s = crearSalidas(fuente);
+        pulsar(s, 3); // la 3 encendida, antes de que la fuente empiece a fallar
+        fuente.setFallar(true);
+
+        // Encender la 1: la fuente lo rechaza. Las dos fotos en la misma
+        // tarea de Swing que el clic.
+        int desde = fuente.escrituras().size();
+        List<FotoSalidas> encender = enSwing(() -> {
+            FotoSalidas previa = fotoSalidas(s);
+            s.panel.getInterruptores()[1].doClick(0);
+            return List.of(previa, fotoSalidas(s));
+        });
+        List<String> avisos = avisos(s);
+        verificar("Con la fuente configurada para fallar, pulsar el interruptor 1 intenta escribir "
+                        + "(1, encendida) una sola vez: al devolver el interruptor no hay una segunda escritura",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(1, true, false))),
+                "intentó " + escriturasDesde(fuente, desde));
+        verificar("... el interruptor 1 vuelve a quedar sin pulsar y ninguna etiqueta cambia: la 1 sigue "
+                        + "\"Apagada\" en negro y la 3 \"Encendida\" en rojo",
+                encender.get(1).equals(encender.get(0))
+                        && pantallaDice(encender.get(1), false, false, false, true),
+                "antes: " + describir(encender.get(0)) + "; después: " + describir(encender.get(1)));
+        verificar("... y se avisa una vez: \"No se pudo encender la salida 1\", con el motivo que dio la fuente",
+                avisos.size() == 1 && avisos.get(0).startsWith("No se pudo encender la salida 1")
+                        && avisos.get(0).contains(FuenteDePrueba.MOTIVO),
+                "avisos: " + avisos);
+
+        // Apagar la 3: también lo rechaza
+        desde = fuente.escrituras().size();
+        List<FotoSalidas> apagar = enSwing(() -> {
+            FotoSalidas previa = fotoSalidas(s);
+            s.panel.getInterruptores()[3].doClick(0);
+            return List.of(previa, fotoSalidas(s));
+        });
+        avisos = avisos(s);
+        verificar("Lo mismo al apagar: pulsar el 3 intenta (3, apagada) una sola vez, el interruptor sigue "
+                        + "pulsado, su etiqueta sigue \"Encendida\" en rojo y se avisa \"No se pudo apagar la salida 3\"",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(3, false, false)))
+                        && apagar.get(1).equals(apagar.get(0))
+                        && pantallaDice(apagar.get(1), false, false, false, true)
+                        && avisos.size() == 2 && avisos.get(1).startsWith("No se pudo apagar la salida 3"),
+                "intentó " + escriturasDesde(fuente, desde) + "; " + describir(apagar.get(1))
+                        + "; avisos: " + avisos);
+        verificar("La fuente conserva las salidas como estaban: solo la 3 encendida",
+                Arrays.equals(fuente.salidas(), new boolean[]{false, false, false, true}),
+                "salidas " + Arrays.toString(fuente.salidas()));
+
+        // La fuente vuelve a aceptar
+        fuente.setFallar(false);
+        desde = fuente.escrituras().size();
+        FotoSalidas recuperada = pulsar(s, 1);
+        verificar("Cuando la fuente vuelve a aceptar, el mismo interruptor funciona: (1, encendida) y "
+                        + "\"Encendida\" en rojo",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(1, true, true)))
+                        && pantallaDice(recuperada, false, true, false, true),
+                "escribió " + escriturasDesde(fuente, desde) + "; " + describir(recuperada));
+    }
+
+    /**
+     * Las salidas con un Muestreador real sobre la misma fuente, a 10 ms. El
+     * hilo de la prueba hace de ControlMuestreo: inicia y detiene el
+     * Muestreador. Si detener() desconectara la fuente, como antes de
+     * I7LV-21 e I7LV-22, la fuente de prueba rechazaría las escrituras
+     * siguientes y contaría la desconexión.
+     */
+    private static void verificarSalidasConMuestreoDetenido() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        Muestreador muestreador = new Muestreador(fuente, 10);
+        AtomicInteger muestras = new AtomicInteger();
+        muestreador.agregarOyente(muestra -> muestras.incrementAndGet());
+        SalidasDePrueba s = crearSalidas(fuente);
+
+        int desde = fuente.escrituras().size();
+        FotoSalidas sinMuestrear = pulsar(s, 0);
+        verificar("Con el Muestreador detenido, sin haberlo iniciado nunca, pulsar el interruptor 0 enciende "
+                        + "la salida 0: (0, encendida) aceptada y \"Encendida\" en rojo",
+                !muestreador.estaCorriendo() && muestras.get() == 0
+                        && escriturasDesde(fuente, desde).equals(List.of(new Escritura(0, true, true)))
+                        && pantallaDice(sinMuestrear, true, false, false, false),
+                "escribió " + escriturasDesde(fuente, desde) + "; " + describir(sinMuestrear));
+
+        // Muestreando, se enciende también la 3; luego se detiene
+        muestreador.iniciar();
+        boolean llegaron = esperarMuestras(muestras, 5);
+        pulsar(s, 3);
+        int escrituras = fuente.escrituras().size();
+        FotoSalidas antes = enSwing(() -> fotoSalidas(s));
+        muestreador.detener();
+        FotoSalidas despues = enSwing(() -> fotoSalidas(s));
+        verificar("Detener el Muestreador no cambia las salidas: siguen encendidas la 0 y la 3, en la fuente y "
+                        + "en la pantalla, y al detener no se escribe nada",
+                llegaron && !muestreador.estaCorriendo()
+                        && pantallaDice(antes, true, false, false, true) && despues.equals(antes)
+                        && fuente.escrituras().size() == escrituras
+                        && Arrays.equals(fuente.salidas(), new boolean[]{true, false, false, true}),
+                (llegaron ? "" : "no llegaron muestras; ") + "salidas " + Arrays.toString(fuente.salidas())
+                        + "; " + describir(despues));
+        boolean entregaDatos = fuente.entregaDatos();
+        verificar("... ni desconecta la fuente: sigue conectada y entregando datos (se conectó 1 vez y no se "
+                        + "desconectó)",
+                fuente.conectada() && entregaDatos && fuente.conexiones() == 1 && fuente.desconexiones() == 0,
+                fuente.estado());
+
+        desde = fuente.escrituras().size();
+        FotoSalidas detenido = pulsar(s, 2);
+        verificar("Con el Muestreador detenido después de haber muestreado, pulsar el interruptor 2 enciende "
+                        + "la salida 2",
+                escriturasDesde(fuente, desde).equals(List.of(new Escritura(2, true, true)))
+                        && pantallaDice(detenido, true, false, true, true),
+                "escribió " + escriturasDesde(fuente, desde) + "; " + describir(detenido));
+    }
+
+    private static void verificarHabilitarSalidas() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        SalidasDePrueba s = crearSalidas(fuente);
+        pulsar(s, 0);
+
+        int desde = fuente.escrituras().size();
+        List<FotoSalidas> deshabilitar = enSwing(() -> {
+            s.setHabilitado(false);
+            FotoSalidas tras = fotoSalidas(s);
+            for (JToggleButton interruptor : s.panel.getInterruptores()) {
+                interruptor.doClick(0);
+            }
+            return List.of(tras, fotoSalidas(s));
+        });
+        verificar("setHabilitado(false) deshabilita los 4 interruptores",
+                deshabilitar.get(0).habilitados().equals(List.of(false, false, false, false)),
+                describir(deshabilitar.get(0)));
+        verificar("... y pulsarlos así no escribe nada ni cambia la pantalla",
+                escriturasDesde(fuente, desde).isEmpty() && deshabilitar.get(1).equals(deshabilitar.get(0)),
+                "escribió " + escriturasDesde(fuente, desde) + "; " + describir(deshabilitar.get(1)));
+
+        FotoSalidas habilitados = enSwing(() -> {
+            s.setHabilitado(true);
+            return fotoSalidas(s);
+        });
+        FotoSalidas pulsado = pulsar(s, 1);
+        verificar("setHabilitado(true) vuelve a habilitar los 4, con la salida 0 todavía encendida, y "
+                        + "pulsar el 1 funciona otra vez",
+                pantallaDice(habilitados, true, false, false, false)
+                        && escriturasDesde(fuente, desde).equals(List.of(new Escritura(1, true, true)))
+                        && pantallaDice(pulsado, true, true, false, false),
+                describir(habilitados) + "; escribió " + escriturasDesde(fuente, desde));
+    }
+
+    /**
+     * ControlMuestreo con la separación entre conexión y muestreo: sus
+     * botones reales, en una barra y una pestaña que nunca se muestran, se
+     * pulsan como lo haría el usuario, con un ControlSalidas sobre la misma
+     * fuente. Mientras la fuente funcione, ControlMuestreo no abre avisos.
+     */
+    private static void verificarIniciarDetenerSinReconectar() throws Exception {
+        FuenteDePrueba fuente = fuenteConectada();
+        Muestreador muestreador = new Muestreador(fuente, 10);
+        AtomicInteger muestras = new AtomicInteger();
+        muestreador.agregarOyente(muestra -> muestras.incrementAndGet());
+        MuestreoDePrueba m = enSwing(() -> {
+            BarraEstado barra = new BarraEstado();
+            PanelMuestreo panel = new PanelMuestreo();
+            return new MuestreoDePrueba(barra, panel, new ControlMuestreo(muestreador, barra, panel, null));
+        });
+        SalidasDePrueba s = crearSalidas(fuente);
+        pulsar(s, 1);
+        int escrituras = fuente.escrituras().size();
+
+        final int corridas = 3;
+        int conMuestras = 0;
+        int botonesMal = 0;
+        for (int k = 0; k < corridas; k++) {
+            int antes = muestras.get();
+            boolean inicio = enSwing(() -> {
+                m.barra().getBtnIniciar().doClick(0);
+                return muestreador.estaCorriendo();
+            });
+            if (esperarMuestras(muestras, antes + 5)) {
+                conMuestras++;
+            }
+            boolean detuvo = enSwing(() -> {
+                m.barra().getBtnDetener().doClick(0);
+                return !muestreador.estaCorriendo();
+            });
+            botonesMal += (inicio ? 0 : 1) + (detuvo ? 0 : 1);
+        }
+        FotoSalidas salidas = enSwing(() -> fotoSalidas(s));
+        verificar(String.format("Con los botones de la barra (ControlMuestreo real), Iniciar y Detener %d veces "
+                                + "seguidas funciona sin reconectar: llegan muestras en cada corrida, la fuente "
+                                + "se conectó una sola vez y sigue conectada, y la salida 1 sigue encendida",
+                        corridas),
+                conMuestras == corridas && botonesMal == 0 && fuente.conectada()
+                        && fuente.conexiones() == 1 && fuente.desconexiones() == 0
+                        && fuente.escrituras().size() == escrituras
+                        && Arrays.equals(fuente.salidas(), new boolean[]{false, true, false, false})
+                        && pantallaDice(salidas, false, true, false, false),
+                "corridas con muestras: " + conMuestras + " de " + corridas + "; botones que no respondieron: "
+                        + botonesMal + "; " + fuente.estado() + "; " + describir(salidas));
+
+        List<BotonesMuestreo> deshabilitado = enSwing(() -> {
+            m.control().setHabilitado(false);
+            BotonesMuestreo tras = botones(m);
+            m.barra().getBtnIniciar().doClick(0);
+            return List.of(tras, botones(m));
+        });
+        verificar("ControlMuestreo.setHabilitado(false), para cuando no se pudo conectar la fuente, deshabilita "
+                        + "Iniciar, el campo del tiempo y Aplicar (Detener ya lo estaba), la barra dice \"Sin "
+                        + "conexión con la fuente de datos\" y pulsar Iniciar no hace nada",
+                deshabilitado.get(0).equals(new BotonesMuestreo(false, false, false, false,
+                        "Sin conexión con la fuente de datos"))
+                        && deshabilitado.get(1).equals(deshabilitado.get(0)) && !muestreador.estaCorriendo(),
+                deshabilitado.toString());
+        BotonesMuestreo habilitado = enSwing(() -> {
+            m.control().setHabilitado(true);
+            return botones(m);
+        });
+        verificar("... y setHabilitado(true) los vuelve a habilitar: la barra dice \"Detenido · cada 10 ms\"",
+                habilitado.equals(new BotonesMuestreo(true, false, true, true, "Detenido · cada 10 ms")),
+                habilitado.toString());
+    }
+
+    // ===================== Utilidades de I7LV-21 e I7LV-22 =====================
+
+    /**
+     * Fuente de prueba de I7LV-21 e I7LV-22. Registra cada llamada a
+     * escribirSalida(), también las que rechaza, y se puede configurar para
+     * rechazarlas. Como la fuente real, exige estar conectada (iniciar())
+     * para leer y escribir, y además cuenta las conexiones y desconexiones.
+     * Sus métodos son synchronized porque la usan el hilo de Swing (las
+     * escrituras) y el hilo del Muestreador (las lecturas).
+     */
+    private static final class FuenteDePrueba implements FuenteDeDatos {
+
+        /** Motivo de las escrituras rechazadas a propósito. El aviso debe incluirlo. */
+        static final String MOTIVO = "falla configurada por la prueba";
+
+        private final List<Escritura> escrituras = new ArrayList<>();
+        private final boolean[] salidas = new boolean[NUM_SALIDAS_DIGITALES];
+        private boolean conectada = false;
+        private boolean fallar = false;
+        private int conexiones = 0;
+        private int desconexiones = 0;
+
+        @Override
+        public synchronized void iniciar() {
+            conectada = true;
+            conexiones++;
+        }
+
+        @Override
+        public synchronized void detener() {
+            conectada = false;
+            desconexiones++;
+        }
+
+        @Override
+        public synchronized double[] leerAnalogicas() throws FuenteDeDatosException {
+            exigirConexion();
+            return ANALOGICAS.clone();
+        }
+
+        @Override
+        public synchronized boolean[] leerDigitales() throws FuenteDeDatosException {
+            exigirConexion();
+            return DIGITALES.clone();
+        }
+
+        @Override
+        public synchronized void escribirSalida(int canal, boolean encendida) throws FuenteDeDatosException {
+            escrituras.add(new Escritura(canal, encendida, conectada && !fallar));
+            exigirConexion();
+            if (fallar) {
+                throw new FuenteDeDatosException(MOTIVO);
+            }
+            salidas[canal] = encendida;
+        }
+
+        @Override
+        public synchronized void fijarTiempoMuestreo(int milisegundos) {
+            // El tiempo de muestreo no es lo que se prueba aquí
+        }
+
+        synchronized void setFallar(boolean fallar) {
+            this.fallar = fallar;
+        }
+
+        /** Copia de todas las escrituras, en orden. */
+        synchronized List<Escritura> escrituras() {
+            return List.copyOf(escrituras);
+        }
+
+        /** Copia del estado de las salidas: el último que la fuente aceptó. */
+        synchronized boolean[] salidas() {
+            return salidas.clone();
+        }
+
+        synchronized boolean conectada() {
+            return conectada;
+        }
+
+        synchronized int conexiones() {
+            return conexiones;
+        }
+
+        synchronized int desconexiones() {
+            return desconexiones;
+        }
+
+        /** Si una lectura funciona, como la que haría el Muestreador. */
+        synchronized boolean entregaDatos() {
+            try {
+                leerAnalogicas();
+                leerDigitales();
+                return true;
+            } catch (FuenteDeDatosException e) {
+                return false;
+            }
+        }
+
+        synchronized String estado() {
+            return (conectada ? "conectada" : "desconectada") + ", " + conexiones + " conexiones y "
+                    + desconexiones + " desconexiones";
+        }
+
+        private void exigirConexion() throws FuenteDeDatosException {
+            if (!conectada) {
+                throw new FuenteDeDatosException("La fuente de prueba no está conectada");
+            }
+        }
+    }
+
+    /** Una llamada a escribirSalida(): la salida, el estado pedido y si la fuente lo aceptó. */
+    private record Escritura(int salida, boolean encendida, boolean aceptada) {
+
+        @Override
+        public String toString() {
+            return "(" + salida + ", " + (encendida ? "encendida" : "apagada")
+                    + (aceptada ? "" : ", rechazada") + ")";
+        }
+    }
+
+    /**
+     * El ControlSalidas del programa sobre una pestaña Salidas que nunca se
+     * muestra. Guarda los avisos en una lista en vez de mostrarlos en un
+     * cuadro de diálogo: así la prueba no abre ventanas.
+     */
+    private static final class SalidasDePrueba extends ControlSalidas {
+
+        final PanelSalidas panel;
+
+        /** Avisos que habría mostrado. Solo se usa en el hilo de Swing. */
+        final List<String> avisos = new ArrayList<>();
+
+        SalidasDePrueba(FuenteDeDatos fuente, PanelSalidas panel) {
+            super(fuente, panel, null);
+            this.panel = panel;
+        }
+
+        @Override
+        protected void avisar(String mensaje) {
+            avisos.add(mensaje);
+        }
+    }
+
+    /**
+     * Lo que muestra la pestaña Salidas en un instante, por salida: si el
+     * interruptor está pulsado y habilitado, y el texto y el color de su
+     * etiqueta.
+     */
+    private record FotoSalidas(List<Boolean> pulsados, List<Boolean> habilitados,
+                               List<String> textos, List<Color> colores) {
+    }
+
+    /** La barra y la pestaña Muestreo, que nunca se muestran, con su ControlMuestreo. */
+    private record MuestreoDePrueba(BarraEstado barra, PanelMuestreo panel, ControlMuestreo control) {
+    }
+
+    /** Si se pueden usar Iniciar, Detener, el campo del tiempo y Aplicar, y el texto de la barra. */
+    private record BotonesMuestreo(boolean iniciar, boolean detener, boolean campo, boolean aplicar,
+                                   String estado) {
+    }
+
+    private static FuenteDePrueba fuenteConectada() {
+        FuenteDePrueba fuente = new FuenteDePrueba();
+        fuente.iniciar();
+        return fuente;
+    }
+
+    /** Crea, en el hilo de Swing, una pestaña Salidas y su control. */
+    private static SalidasDePrueba crearSalidas(FuenteDePrueba fuente) throws Exception {
+        return enSwing(() -> new SalidasDePrueba(fuente, new PanelSalidas()));
+    }
+
+    /** Pulsa el interruptor de la salida como el usuario y devuelve cómo quedó la pestaña. */
+    private static FotoSalidas pulsar(SalidasDePrueba s, int salida) throws Exception {
+        return enSwing(() -> {
+            s.panel.getInterruptores()[salida].doClick(0);
+            return fotoSalidas(s);
+        });
+    }
+
+    /** Toma la foto de la pestaña Salidas. Se llama en el hilo de Swing. */
+    private static FotoSalidas fotoSalidas(SalidasDePrueba s) {
+        List<Boolean> pulsados = new ArrayList<>();
+        List<Boolean> habilitados = new ArrayList<>();
+        for (JToggleButton interruptor : s.panel.getInterruptores()) {
+            pulsados.add(interruptor.isSelected());
+            habilitados.add(interruptor.isEnabled());
+        }
+        List<String> textos = new ArrayList<>();
+        List<Color> colores = new ArrayList<>();
+        for (JLabel estado : s.panel.getEstados()) {
+            textos.add(estado.getText());
+            colores.add(estado.getForeground());
+        }
+        return new FotoSalidas(pulsados, habilitados, textos, colores);
+    }
+
+    /** Copia de los avisos que dio el control. */
+    private static List<String> avisos(SalidasDePrueba s) throws Exception {
+        return enSwing(() -> List.copyOf(s.avisos));
+    }
+
+    /**
+     * Si la pestaña muestra esas salidas encendidas y las demás apagadas, con
+     * los 4 interruptores habilitados: pulsado y "Encendida" en rojo, o sin
+     * pulsar y "Apagada" en negro.
+     */
+    private static boolean pantallaDice(FotoSalidas f, boolean... encendidas) {
+        for (int i = 0; i < encendidas.length; i++) {
+            if (f.pulsados().get(i) != encendidas[i] || !f.habilitados().get(i)
+                    || !f.textos().get(i).equals(encendidas[i] ? "Encendida" : "Apagada")
+                    || !f.colores().get(i).equals(encendidas[i] ? Tema.ROJO : Tema.NEGRO)) {
+                return false;
+            }
+        }
+        return f.pulsados().size() == encendidas.length;
+    }
+
+    /** Las escrituras aceptadas que dejan las salidas 0 a 3 en esos estados, una por salida. */
+    private static List<Escritura> escrituras(boolean... encendidas) {
+        List<Escritura> lista = new ArrayList<>();
+        for (int salida = 0; salida < encendidas.length; salida++) {
+            lista.add(new Escritura(salida, encendidas[salida], true));
+        }
+        return lista;
+    }
+
+    /** Las escrituras ordenadas por número de salida (el orden en que se envían no importa). */
+    private static List<Escritura> porSalida(List<Escritura> escrituras) {
+        return escrituras.stream().sorted(Comparator.comparingInt(Escritura::salida)).toList();
+    }
+
+    /** Las escrituras que recibió la fuente desde la número desde (incluida). */
+    private static List<Escritura> escriturasDesde(FuenteDePrueba fuente, int desde) {
+        List<Escritura> todas = fuente.escrituras();
+        return todas.subList(desde, todas.size());
+    }
+
+    /** Espera a que el contador llegue a esa cantidad de muestras. Espera como mucho 5 s. */
+    private static boolean esperarMuestras(AtomicInteger muestras, int cantidad) throws InterruptedException {
+        long limite = System.nanoTime() + 5_000_000_000L;
+        while (muestras.get() < cantidad) {
+            if (System.nanoTime() > limite) {
+                return false;
+            }
+            Thread.sleep(5);
+        }
+        return true;
+    }
+
+    /** Lee los botones y el texto de la barra de ControlMuestreo. Se llama en el hilo de Swing. */
+    private static BotonesMuestreo botones(MuestreoDePrueba m) {
+        return new BotonesMuestreo(m.barra().getBtnIniciar().isEnabled(), m.barra().getBtnDetener().isEnabled(),
+                m.panel().getTxtNuevoTiempo().isEnabled(), m.panel().getBtnAplicar().isEnabled(),
+                m.barra().getLblEstado().getText());
+    }
+
+    private static String describir(FotoSalidas f) {
+        List<String> etiquetas = new ArrayList<>();
+        for (int i = 0; i < f.textos().size(); i++) {
+            etiquetas.add("\"" + f.textos().get(i) + "\" " + nombreColor(f.colores().get(i)));
+        }
+        return "interruptores pulsados " + f.pulsados() + ", habilitados " + f.habilitados()
+                + ", etiquetas " + etiquetas;
+    }
+
+    private static String nombreColor(Color color) {
+        if (color.equals(Tema.ROJO)) {
+            return "en rojo";
+        }
+        if (color.equals(Tema.NEGRO)) {
+            return "en negro";
+        }
+        return String.format("en RGB %d, %d, %d", color.getRed(), color.getGreen(), color.getBlue());
     }
 
     // ===================== Utilidades =====================

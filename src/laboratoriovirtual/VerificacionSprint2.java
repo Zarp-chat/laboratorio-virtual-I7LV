@@ -4,12 +4,19 @@ import java.awt.BasicStroke;
 import java.awt.Graphics2D;
 import java.awt.Paint;
 import java.awt.Rectangle;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.Random;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntUnaryOperator;
@@ -32,6 +39,7 @@ import laboratoriovirtual.muestreo.Muestreador;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.ChartRenderingInfo;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.event.ChartChangeListener;
 import org.jfree.chart.plot.CombinedDomainXYPlot;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
@@ -40,9 +48,11 @@ import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
 /**
- * Verifica las tareas I7LV-17 e I7LV-16 sin abrir ninguna ventana. Se
- * ejecuta con Shift+F6 y muestra una línea [OK] o [FALLA] por criterio,
- * igual que VerificacionSprint1.
+ * Verifica las tareas del Sprint 2 (I7LV-17, I7LV-16, I7LV-20 e I7LV-19)
+ * sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
+ * [OK] o [FALLA] por criterio, igual que VerificacionSprint1. Una excepción
+ * no capturada, en cualquier hilo, se imprime completa y cuenta como FALLA;
+ * el programa nunca se queda colgado por ella (ver main()).
  *
  * I7LV-17: alimenta SerieEnVivo (la parte de datos de las gráficas en vivo)
  * con muestras sintéticas y revisa la ventana de 30 s, el historial, el
@@ -65,6 +75,13 @@ import org.jfree.data.xy.XYSeriesCollection;
  * nunca se muestra. Las muestras son sintéticas con bits conocidos, así se
  * sabe qué debe haber en cada carril, en cada historial y en el carril
  * "Valor" en cada instante.
+ *
+ * I7LV-19: conecta, como Main, el selector de la pestaña "Señal digital"
+ * (el JComboBox<String> de un PanelSenal con D0 a D3) con la GraficaDigital
+ * real mediante ControlSeleccion, y elige señales en el selector como lo
+ * haría el usuario. Revisa la selección, el título, el historial entregado,
+ * que no se borre nada, el color de los nombres de los carriles (también en
+ * una imagen de la gráfica dibujada) y que la pestaña analógica siga igual.
  */
 public class VerificacionSprint2 {
 
@@ -116,13 +133,78 @@ public class VerificacionSprint2 {
      */
     private static final int MUESTRAS_POR_CORRIDA = 40_000;
 
-    /** Primer error sin atrapar en otro hilo (por ejemplo, en el Timer) durante I7LV-20. */
-    private static final AtomicReference<Throwable> ERROR_EN_OTRO_HILO = new AtomicReference<>();
+    /**
+     * Muestras que el hilo productor de la prueba de concurrencia de I7LV-16
+     * puede enviar después de un cambio de canal antes de esperar el
+     * siguiente. Sin este tope, cuando el Timer de la gráfica se quedaba
+     * atrás, la cola y el historial crecían sin límite hasta agotar la
+     * memoria (ver verificarCambiosConcurrentes()). Es menos que los 30 000
+     * puntos de la ventana visible (30 s a 1 ms por muestra): así, un punto
+     * del canal anterior que se colara en la serie sigue a la vista cuando
+     * la revisa el cambio siguiente.
+     */
+    private static final int MUESTRAS_POR_CAMBIO = 20_000;
+
+    /**
+     * Excepciones no capturadas en otros hilos (por ejemplo, en el Timer de
+     * una gráfica, que corre en el hilo de Swing). Cada una se imprime
+     * completa en cuanto ocurre y queda aquí hasta que la revisión al final
+     * de su sección la cuenta como FALLA (revisarErroresEnOtrosHilos()).
+     */
+    private static final Queue<Throwable> ERRORES_EN_OTROS_HILOS = new ConcurrentLinkedQueue<>();
+
+    /** Sección que se está verificando, para decir dónde ocurrió una excepción. */
+    private static volatile String seccionActual = "(antes de la primera sección)";
 
     private static int aprobados = 0;
     private static int fallidos = 0;
 
-    public static void main(String[] args) throws Exception {
+    /**
+     * Ejecuta todas las secciones y termina el programa con el resumen.
+     *
+     * Excepciones no capturadas:
+     * - En otro hilo (el Timer de una gráfica, un hilo de prueba): se
+     *   imprimen completas al momento, cuentan como FALLA y la verificación
+     *   sigue.
+     * - En este hilo, incluidas las de una tarea de enSwing() (llegan aquí
+     *   envueltas en una InvocationTargetException): la verificación no
+     *   puede seguir. Se imprime completa, cuenta como FALLA y el programa
+     *   termina con un mensaje claro.
+     * Siempre termina con System.exit: las gráficas de prueba dejan corriendo
+     * su Timer de refresco, que le manda un evento al hilo de Swing cada
+     * 50 ms y así lo mantiene vivo. Sin System.exit el programa no terminaría
+     * nunca, ni siquiera después de una excepción.
+     */
+    public static void main(String[] args) {
+        Thread.setDefaultUncaughtExceptionHandler(VerificacionSprint2::excepcionEnOtroHilo);
+        try {
+            verificarSecciones();
+        } catch (Throwable e) {
+            fallidos++;
+            String encabezado = "[FALLA] Excepción no capturada en el hilo principal, durante \""
+                    + seccionActual + "\".";
+            if (e instanceof InvocationTargetException && e.getCause() != null) {
+                encabezado += " Ocurrió dentro de una tarea del hilo de Swing: " + e.getCause();
+            }
+            imprimirExcepcion(encabezado, e);
+            System.out.println();
+            System.out.println("===================================");
+            System.out.println("VERIFICACIÓN DETENIDA por una excepción no capturada: ver la traza de arriba.");
+            System.out.println("Resultado hasta ese momento: " + aprobados + " aprobados, " + fallidos
+                    + " fallidos. Las pruebas que faltaban no se ejecutaron.");
+            System.exit(1);
+        }
+
+        System.out.println();
+        System.out.println("===================================");
+        System.out.println("Resultado: " + aprobados + " aprobados, " + fallidos + " fallidos");
+        System.out.println(fallidos == 0
+                ? "I7LV-17, I7LV-16, I7LV-20 e I7LV-19 cumplen sus criterios."
+                : "Hay criterios sin cumplir: revisa las líneas [FALLA].");
+        System.exit(fallidos == 0 ? 0 : 1);
+    }
+
+    private static void verificarSecciones() throws Exception {
         titulo("I7LV-17  Gráfica de la señal analógica (datos, sin ventana)");
 
         verificarCola();
@@ -139,12 +221,9 @@ public class VerificacionSprint2 {
         verificarControlSeleccion();
         verificarCambiosConcurrentes();
 
-        titulo("I7LV-20  Gráfica de la señal digital (datos y gráfica real, sin ventana)");
+        revisarErroresEnOtrosHilos("I7LV-17 e I7LV-16");
 
-        // Un error en el Timer de una gráfica ocurre en el hilo de Swing y
-        // solo se imprimiría: así queda registrado y la prueba lo detecta.
-        Thread.setDefaultUncaughtExceptionHandler(
-                (hilo, e) -> ERROR_EN_OTRO_HILO.compareAndSet(null, e));
+        titulo("I7LV-20  Gráfica de la señal digital (datos y gráfica real, sin ventana)");
 
         verificarRegistroDigital();
         verificarHexadecimal();
@@ -156,20 +235,71 @@ public class VerificacionSprint2 {
         verificarHistorialConcurrente();
         verificarSeleccionConcurrente();
 
-        Throwable error = ERROR_EN_OTRO_HILO.get();
-        verificar("Ningún error sin atrapar en el Timer (hilo de Swing) ni en otro hilo durante I7LV-20",
-                error == null, String.valueOf(error));
+        revisarErroresEnOtrosHilos("I7LV-20");
 
-        System.out.println();
-        System.out.println("===================================");
-        System.out.println("Resultado: " + aprobados + " aprobados, " + fallidos + " fallidos");
-        System.out.println(fallidos == 0
-                ? "I7LV-17, I7LV-16 e I7LV-20 cumplen sus criterios."
-                : "Hay criterios sin cumplir: revisa las líneas [FALLA].");
+        titulo("I7LV-19  Selección de la señal digital con el selector (gráfica real, sin ventana)");
 
-        // Las gráficas de I7LV-16 dejan corriendo su Timer de refresco, que
-        // mantiene vivo el hilo de Swing: sin esto el programa no terminaría.
-        System.exit(fallidos == 0 ? 0 : 1);
+        verificarSelectorDigital();
+        verificarNombresCarriles();
+        verificarRecorridoConFlechas();
+        verificarAnalogicaSigueIgual();
+
+        revisarErroresEnOtrosHilos("I7LV-19");
+    }
+
+    // ===================== Excepciones no capturadas =====================
+
+    /**
+     * Manejador de las excepciones no capturadas en otros hilos (ver main()).
+     * La imprime completa al momento y la deja para la revisión de la sección.
+     */
+    private static void excepcionEnOtroHilo(Thread hilo, Throwable e) {
+        ERRORES_EN_OTROS_HILOS.add(e);
+        imprimirExcepcion("[EXCEPCIÓN] No capturada en el hilo \"" + hilo.getName() + "\", durante \""
+                + seccionActual + "\". Cuenta como FALLA en la revisión al final de esta sección.", e);
+    }
+
+    /**
+     * Manejador para un hilo de prueba cuyo error revisa la propia prueba: lo
+     * guarda en donde, para que la prueba lo cuente como FALLA, y lo imprime
+     * completo al momento.
+     */
+    private static Thread.UncaughtExceptionHandler guardarEImprimir(AtomicReference<Throwable> donde) {
+        return (hilo, e) -> {
+            donde.compareAndSet(null, e);
+            imprimirExcepcion("[EXCEPCIÓN] No capturada en el hilo \"" + hilo.getName() + "\", durante \""
+                    + seccionActual + "\". Cuenta como FALLA en la prueba que usa ese hilo.", e);
+        };
+    }
+
+    /**
+     * Cuenta como FALLA las excepciones no capturadas en otros hilos desde la
+     * revisión anterior (ya se imprimieron completas cuando ocurrieron) y las
+     * descarta, así cada revisión solo cuenta las de su sección.
+     */
+    private static void revisarErroresEnOtrosHilos(String secciones) {
+        List<Throwable> errores = new ArrayList<>();
+        Throwable error;
+        while ((error = ERRORES_EN_OTROS_HILOS.poll()) != null) {
+            errores.add(error);
+        }
+        verificar("Ningún error sin atrapar en el Timer (hilo de Swing) ni en otro hilo durante " + secciones,
+                errores.isEmpty(),
+                errores.size() + (errores.size() == 1 ? " excepción" : " excepciones")
+                        + " (impresas completas arriba); la primera: "
+                        + (errores.isEmpty() ? "" : errores.get(0)));
+    }
+
+    /**
+     * Imprime el encabezado y la traza completa de la excepción en una sola
+     * escritura: así no se mezcla con lo que otro hilo imprima al mismo
+     * tiempo.
+     */
+    private static void imprimirExcepcion(String encabezado, Throwable e) {
+        StringWriter traza = new StringWriter();
+        e.printStackTrace(new PrintWriter(traza));
+        System.out.print(encabezado + System.lineSeparator() + traza);
+        System.out.flush();
     }
 
     // ===================== Cola entre hilos =====================
@@ -379,7 +509,7 @@ public class VerificacionSprint2 {
                 compartida.agregar(tiempo(i), valor(i));
             }
         }, "Productor de prueba");
-        productor.setUncaughtExceptionHandler((hilo, e) -> error.set(e));
+        productor.setUncaughtExceptionHandler(guardarEImprimir(error));
 
         boolean copiasCorrectas = true;
         int copias = 0;
@@ -642,6 +772,18 @@ public class VerificacionSprint2 {
      * puntos) alcanza a abarcar varios cambios seguidos. Si un cambio dejara
      * en la cola puntos del canal anterior, el Timer los dibujaría y la
      * revisión del cambio siguiente los encontraría.
+     *
+     * Tope de envío: después de cada cambio, el otro hilo envía a lo sumo
+     * MUESTRAS_POR_CAMBIO muestras y espera el cambio siguiente. Sin tope,
+     * la prueba agotaba la memoria en algunas corridas: el Timer saca puntos
+     * de la cola hasta dejarla vacía, y con un productor casi igual de rápido
+     * un ciclo del Timer llegó a durar 98 s (72 millones de puntos). Mientras
+     * tanto no había cambios de canal, que son los que vacían el historial,
+     * y el historial creció hasta llenar los 8 GB. Con el tope, la cola y el
+     * historial nunca pasan de 20 000 puntos. El envío sigue siendo sin
+     * pausas, millones de muestras por segundo mientras no llega al tope, y
+     * el tope es menor que la ventana visible: un punto colado sigue a la
+     * vista en la revisión del cambio siguiente.
      */
     private static void verificarCambiosConcurrentes() throws Exception {
         GraficaDePrueba g = crearGrafica(0);
@@ -651,16 +793,35 @@ public class VerificacionSprint2 {
             AtomicBoolean enviando = new AtomicBoolean(true);
             AtomicLong enviadas = new AtomicLong();
             AtomicReference<Throwable> errorProductor = new AtomicReference<>();
+            // Cambios hechos, para que el otro hilo sepa cuándo puede seguir,
+            // y veces que llegó al tope y tuvo que esperar
+            AtomicInteger cambiosHechos = new AtomicInteger();
+            AtomicInteger esperasEnElTope = new AtomicInteger();
             long desde = siguienteMuestra;
             Thread productor = new Thread(() -> {
                 long i = desde;
+                int cambiosVistos = 0;
+                int desdeElCambio = 0;
                 while (enviando.get()) {
-                    g.grafica().muestraRecibida(muestra(tiempoRapido(i)));
-                    i++;
+                    int hechos = cambiosHechos.get();
+                    if (hechos != cambiosVistos) {
+                        cambiosVistos = hechos;
+                        desdeElCambio = 0;
+                    }
+                    if (desdeElCambio < MUESTRAS_POR_CAMBIO) {
+                        g.grafica().muestraRecibida(muestra(tiempoRapido(i)));
+                        i++;
+                        desdeElCambio++;
+                        if (desdeElCambio == MUESTRAS_POR_CAMBIO) {
+                            esperasEnElTope.incrementAndGet();
+                        }
+                    } else {
+                        Thread.onSpinWait(); // en el tope: espera el cambio siguiente
+                    }
                 }
                 enviadas.set(i - desde);
             }, "Muestreador de prueba");
-            productor.setUncaughtExceptionHandler((hilo, e) -> errorProductor.set(e));
+            productor.setUncaughtExceptionHandler(guardarEImprimir(errorProductor));
 
             Random azar = new Random(ronda);
             int canal = enSwing(() -> g.grafica().getCanal());
@@ -677,6 +838,7 @@ public class VerificacionSprint2 {
                     int ajenos = ajenos(serie, valorCanal(actual));
                     int dibujados = serie.getItemCount();
                     g.grafica().cambiarCanal(nuevo);
+                    cambiosHechos.incrementAndGet(); // el otro hilo puede enviar otra tanda
                     ajenos += serie.getItemCount(); // debe quedar vacía
                     ajenos += ajenos(g.grafica().getHistorial(), valorCanal(nuevo));
                     return new int[]{ajenos, dibujados > 0 ? 1 : 0};
@@ -708,11 +870,12 @@ public class VerificacionSprint2 {
                     && soloVale(alFinal.valoresSerie(), valorCanal(ultimo));
 
             verificar(String.format("Ronda %d de %d: %d cambios de canal mientras otro hilo envía "
-                            + "muestras sin parar (%,d muestras en %.1f s; el Timer dibujó entre "
-                            + "cambios %d veces): ningún punto de otro canal, y al final solo "
-                            + "valores del último canal elegido (A%d)",
+                            + "muestras sin parar (%,d muestras en %.1f s, a lo sumo %,d por cambio; "
+                            + "llegó a ese tope %d veces; el Timer dibujó entre cambios %d veces): "
+                            + "ningún punto de otro canal, y al final solo valores del último "
+                            + "canal elegido (A%d)",
                             ronda, RONDAS, CAMBIOS_POR_RONDA, enviadas.get(), segundos,
-                            cambiosConDibujo, ultimo),
+                            MUESTRAS_POR_CAMBIO, esperasEnElTope.get(), cambiosConDibujo, ultimo),
                     errorProductor.get() == null && puntosAjenos == 0 && finalCorrecto,
                     errorProductor.get() != null ? errorProductor.get().toString()
                             : puntosAjenos + " puntos de otro canal durante los cambios; al final: "
@@ -1457,7 +1620,7 @@ public class VerificacionSprint2 {
                 pausar(1);
             }
         }, "Productor de prueba");
-        productor.setUncaughtExceptionHandler((hilo, e) -> error.set(e));
+        productor.setUncaughtExceptionHandler(guardarEImprimir(error));
 
         int copias = 0;
         int incoherentes = 0;
@@ -1521,7 +1684,7 @@ public class VerificacionSprint2 {
                 }
                 enviadas.set(i - desde);
             }, "Muestreador de prueba");
-            productor.setUncaughtExceptionHandler((hilo, e) -> errorProductor.set(e));
+            productor.setUncaughtExceptionHandler(guardarEImprimir(errorProductor));
 
             Random azar = new Random(100 + ronda);
             int canal = enSwing(() -> g.grafica().getCanal());
@@ -1561,17 +1724,7 @@ public class VerificacionSprint2 {
                 List<SerieEnVivo.Punto> historial = g.grafica().getHistorial();
                 int mal = historial.size() == ultima + 1 ? 0 : 1;
                 mal += incoherencias(historial, ultimo);
-                double inicioEje = g.chart().getXYPlot().getDomainAxis().getLowerBound();
-                for (SerieEnVivo.Punto p : historial) {
-                    if (p.tiempo() >= inicioEje) {
-                        int bitsMuestra = patronRapido(Math.round(p.tiempo() * 1000));
-                        for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
-                            if (valorEn(g.serie(carril), p.tiempo()) != esperado(bitsMuestra, carril)) {
-                                mal++;
-                            }
-                        }
-                    }
-                }
+                mal += dibujadoDistinto(g, historial);
                 return mal + (resaltada(fotoDigital(g), ultimo) ? 0 : 1);
             });
 
@@ -1612,11 +1765,12 @@ public class VerificacionSprint2 {
     /**
      * Lo que muestra la gráfica digital en un instante. Dos fotos son iguales
      * (equals) si tienen la misma selección, título, series, historial,
-     * colores, grosores y eje X.
+     * colores, grosores, colores de los nombres de los carriles y eje X.
      */
     private record FotoDigital(int canal, String titulo, List<List<SerieEnVivo.Punto>> series,
                                List<SerieEnVivo.Punto> historial, List<Paint> colores,
-                               List<Float> grosores, double inicioEje, double finEje) {
+                               List<Float> grosores, List<Paint> coloresNombres,
+                               double inicioEje, double finEje) {
     }
 
     /** Crea, en el hilo de Swing, una pestaña con D0 a D3 y su gráfica digital. */
@@ -1642,8 +1796,20 @@ public class VerificacionSprint2 {
         }
         Range ejeX = g.chart().getXYPlot().getDomainAxis().getRange();
         return new FotoDigital(g.grafica().getCanal(), g.chart().getTitle().getText(), series,
-                g.grafica().getHistorial(), colores, grosores,
+                g.grafica().getHistorial(), colores, grosores, coloresNombres(g),
                 ejeX.getLowerBound(), ejeX.getUpperBound());
+    }
+
+    /**
+     * Color del nombre de cada carril (el rótulo de su eje Y), de D0 a D3 y
+     * Valor. Se llama en el hilo de Swing.
+     */
+    private static List<Paint> coloresNombres(DigitalDePrueba g) {
+        List<Paint> colores = new ArrayList<>();
+        for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+            colores.add(g.carril(carril).getRangeAxis().getLabelPaint());
+        }
+        return colores;
     }
 
     /** Si la señal está en rojo y más gruesa, y las demás en gris oscuro, todas igual de delgadas. */
@@ -1703,6 +1869,28 @@ public class VerificacionSprint2 {
             }
         }
         return cuenta;
+    }
+
+    /**
+     * Cuántos valores dibujados no son los enviados en una prueba de
+     * concurrencia: en el tiempo de cada muestra del historial que cae en la
+     * ventana visible, cada uno de los 5 carriles debe valer lo que traía
+     * esa muestra. Se llama en el hilo de Swing.
+     */
+    private static int dibujadoDistinto(DigitalDePrueba g, List<SerieEnVivo.Punto> historial) {
+        int mal = 0;
+        double inicioEje = g.chart().getXYPlot().getDomainAxis().getLowerBound();
+        for (SerieEnVivo.Punto p : historial) {
+            if (p.tiempo() >= inicioEje) {
+                int bitsMuestra = patronRapido(Math.round(p.tiempo() * 1000));
+                for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+                    if (valorEn(g.serie(carril), p.tiempo()) != esperado(bitsMuestra, carril)) {
+                        mal++;
+                    }
+                }
+            }
+        }
+        return mal;
     }
 
     /** Envía a la gráfica digital las muestras desde (incluida) hasta (excluida), con esos bits. */
@@ -1910,7 +2098,8 @@ public class VerificacionSprint2 {
     private static String describir(FotoDigital f) {
         return "seleccionada " + f.canal() + ", título \"" + f.titulo() + "\", series con "
                 + f.series().stream().map(List::size).toList() + " puntos, historial con "
-                + f.historial().size() + ", colores " + f.colores() + ", grosores " + f.grosores();
+                + f.historial().size() + ", colores " + f.colores() + ", grosores " + f.grosores()
+                + ", nombres " + f.coloresNombres();
     }
 
     private static String rango(FotoDigital f) {
@@ -1919,6 +2108,471 @@ public class VerificacionSprint2 {
 
     private static String rango(SenalesDigitalesEnVivo datos) {
         return String.format("va de %.2f a %.2f s", datos.getInicioVentana(), datos.getFinVentana());
+    }
+
+    // ===================== I7LV-19: selector de la señal digital =====================
+
+    /**
+     * El selector de la pestaña "Señal digital" conectado con la gráfica
+     * digital por ControlSeleccion, como en Main. El selector es el
+     * JComboBox<String> de la pestaña de la prueba, con D0 a D3, igual al de
+     * la ventana; se elige en él como lo haría el usuario.
+     */
+    private static void verificarSelectorDigital() throws Exception {
+        DigitalDePrueba g = crearDigital(0);
+        JComboBox<String> selector = g.panel().getComboCanal();
+        int hasta = 5 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarDigital(g, 0, hasta, VerificacionSprint2::patron); // 5 s con D0 seleccionada
+        esperarDibujoDigital(g, tiempo(hasta - 1));
+
+        // Antes de conectarlo, el selector se deja en otra señal (D3): así se
+        // ve que es el control el que lo pone en la señal de la gráfica
+        List<FotoDigital> creacion = enSwing(() -> {
+            selector.setSelectedIndex(3);
+            FotoDigital previa = fotoDigital(g);
+            new ControlSeleccion(selector, g.grafica());
+            return List.of(previa, fotoDigital(g));
+        });
+        FotoDigital creado = creacion.get(1);
+        String mostrado = enSwing(() -> selector.getSelectedIndex() + " " + selector.getSelectedItem());
+        verificar("Al crear el ControlSeleccion, el selector muestra D0 y la gráfica tiene seleccionado "
+                        + "el canal 0",
+                mostrado.equals("0 D0") && creado.canal() == 0,
+                "el selector muestra " + mostrado + "; " + describir(creado));
+        verificar("... y crearlo no cambia la gráfica: sigue \"Seleccionada: D0\" con D0 resaltada, y "
+                        + "las mismas series e historial",
+                creacion.get(0).equals(creado) && creado.titulo().equals("Seleccionada: D0")
+                        && resaltada(creado, 0) && !creado.series().get(0).isEmpty(),
+                "antes: " + describir(creacion.get(0)) + "; después: " + describir(creado));
+
+        // Elegir D2 en el selector. Las dos fotos y la cuenta de redibujos en
+        // la misma tarea de Swing: el Timer no puede cambiar nada entre medio
+        int[] redibujos = {0};
+        List<FotoDigital> eleccion = enSwing(() -> {
+            FotoDigital previa = fotoDigital(g);
+            ChartChangeListener contador = e -> redibujos[0]++;
+            g.chart().addChangeListener(contador);
+            selector.setSelectedItem("D2");
+            g.chart().removeChangeListener(contador);
+            return List.of(previa, fotoDigital(g));
+        });
+        FotoDigital antes = eleccion.get(0);
+        FotoDigital tras = eleccion.get(1);
+        verificar("Elegir D2 en el selector deja seleccionado el canal 2 y el título dice "
+                        + "\"Seleccionada: D2\", con D2 resaltada y un solo redibujo",
+                tras.canal() == 2 && tras.titulo().equals("Seleccionada: D2") && resaltada(tras, 2)
+                        && redibujos[0] == 1,
+                describir(tras) + "; redibujos: " + redibujos[0]);
+        verificar("... y el historial entregado es el de D2: sus 501 muestras, con los bits de D2",
+                diferencias(tras.historial(), 2, hasta, VerificacionSprint2::patron) == 0,
+                describir(tras));
+        verificar("... sin borrar la gráfica: las 5 series dibujadas y el eje X quedan igual",
+                !antes.series().get(0).isEmpty() && tras.series().equals(antes.series())
+                        && tras.inicioEje() == antes.inicioEje() && tras.finEje() == antes.finEje(),
+                "antes: " + describir(antes) + "; después: " + describir(tras));
+        verificar("El nombre del carril seleccionado está en rojo y los demás, incluido Valor, en "
+                        + "negro: D0 antes de cambiar; D2 después, y D0 vuelve a negro",
+                nombreResaltado(creado.coloresNombres(), 0) && nombreResaltado(tras.coloresNombres(), 2),
+                "antes: " + creado.coloresNombres() + "; después: " + tras.coloresNombres());
+
+        // Siguen llegando muestras con D2 seleccionada
+        int mas = hasta + 2 * MUESTRAS_POR_SEGUNDO;
+        enviarDigital(g, hasta, mas, VerificacionSprint2::patron);
+        esperarDibujoDigital(g, tiempo(mas - 1));
+        List<List<SerieEnVivo.Punto>> historiales = historialesPorSelector(g);
+        int malos = 0;
+        for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+            malos += diferencias(historiales.get(canal), canal, mas, VerificacionSprint2::patron);
+        }
+        int alFinal = enSwing(() -> g.grafica().getCanal());
+        verificar("Los historiales de los 4 canales siguen completos después de cambiar la selección: "
+                        + "al elegir cada señal en el selector se entrega la suya, con las 701 muestras "
+                        + "(5 s antes del cambio y 2 s después)",
+                malos == 0 && alFinal == 2,
+                malos + " puntos no coinciden; tamaños " + tamanos(historiales)
+                        + "; seleccionada al final: " + alFinal);
+
+        // Volver a elegir D2, por nombre y por posición
+        int[] avisos = {0};
+        String[] enSelector = new String[1];
+        List<FotoDigital> mismo = enSwing(() -> {
+            FotoDigital previa = fotoDigital(g);
+            ChartChangeListener contador = e -> avisos[0]++;
+            g.chart().addChangeListener(contador);
+            selector.setSelectedItem("D2");
+            selector.setSelectedIndex(2);
+            g.chart().removeChangeListener(contador);
+            enSelector[0] = String.valueOf(selector.getSelectedItem());
+            return List.of(previa, fotoDigital(g));
+        });
+        verificar("Volver a elegir D2, la señal ya elegida, no cambia nada: ni selección, ni título, ni "
+                        + "colores, ni nombres, ni series, ni historial, y la gráfica ni se redibuja",
+                mismo.get(0).equals(mismo.get(1)) && mismo.get(1).canal() == 2
+                        && enSelector[0].equals("D2") && avisos[0] == 0,
+                "antes: " + describir(mismo.get(0)) + "; después: " + describir(mismo.get(1))
+                        + "; redibujos: " + avisos[0]);
+    }
+
+    /**
+     * El nombre del carril seleccionado en rojo también con la gráfica vacía
+     * (antes del primer Iniciar), y al cambiar la selección. Además de los
+     * colores configurados, se dibuja la gráfica en una imagen, como lo hace
+     * el ChartPanel, y se revisa dónde quedan los píxeles rojos y negros: así
+     * se comprueba que el nombre de verdad se ve.
+     */
+    private static void verificarNombresCarriles() throws Exception {
+        DigitalDePrueba g = crearDigital(0);
+        JComboBox<String> selector = g.panel().getComboCanal();
+        FotoDigital vacia = enSwing(() -> {
+            new ControlSeleccion(selector, g.grafica());
+            return fotoDigital(g);
+        });
+        NombresDibujados dibujo = dibujarNombres(g);
+        verificar("Con la gráfica vacía, el nombre de D0 (la seleccionada) está en rojo y los demás en negro",
+                vacia.series().get(0).isEmpty() && nombreResaltado(vacia.coloresNombres(), 0),
+                describir(vacia));
+        verificar("... y así se ve al dibujarla: los únicos píxeles rojos (" + dibujo.rojosEnTotal()
+                        + ") forman el nombre de D0, y los nombres de D1, D2, D3 y Valor son negros",
+                nombreRojoEnDibujo(dibujo, 0, true), dibujo.toString());
+
+        FotoDigital vaciaD3 = enSwing(() -> {
+            selector.setSelectedIndex(3);
+            return fotoDigital(g);
+        });
+        NombresDibujados dibujoD3 = dibujarNombres(g);
+        verificar("Con la gráfica todavía vacía, elegir D3 en el selector pone su nombre en rojo y el de "
+                        + "D0 vuelve a negro, también en el dibujo, y el título dice \"Seleccionada: D3\"",
+                vaciaD3.titulo().equals("Seleccionada: D3") && nombreResaltado(vaciaD3.coloresNombres(), 3)
+                        && nombreRojoEnDibujo(dibujoD3, 3, true),
+                describir(vaciaD3) + "; " + dibujoD3);
+
+        // Con datos, la línea roja de la señal también tiene píxeles rojos,
+        // pero dentro de su carril: la zona de los nombres no cambia
+        int hasta = 5 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarDigital(g, 0, hasta, VerificacionSprint2::patron);
+        esperarDibujoDigital(g, tiempo(hasta - 1));
+        FotoDigital conDatos = enSwing(() -> {
+            selector.setSelectedIndex(1);
+            return fotoDigital(g);
+        });
+        NombresDibujados dibujoD1 = dibujarNombres(g);
+        verificar("Con datos, elegir D1 pone su nombre en rojo y los demás en negro, también en el dibujo",
+                nombreResaltado(conDatos.coloresNombres(), 1) && resaltada(conDatos, 1)
+                        && nombreRojoEnDibujo(dibujoD1, 1, false),
+                describir(conDatos) + "; " + dibujoD1);
+    }
+
+    /**
+     * Como recorrer el selector con las flechas ↓ y ↑ a 10 ms: un hilo envía
+     * muestras sin parar mientras el hilo de Swing mueve el selector una
+     * posición por vez (D0, D1, D2, D3, D2, D1, D0, D1...), 1000 veces. Las
+     * flechas del teclado solo actúan con la ventana visible; aquí se cambia
+     * la posición del selector por código, que produce los mismos avisos
+     * (ItemEvent) que las flechas.
+     *
+     * En cada paso, en la misma tarea de Swing, se revisa que la gráfica siga
+     * al selector (señal, título y nombre en rojo), que no se toque ninguna
+     * serie y que el historial entregado sea el de la señal elegida,
+     * completo y coherente. Al final, que los 5 carriles dibujen lo enviado.
+     */
+    private static void verificarRecorridoConFlechas() throws Exception {
+        DigitalDePrueba g = crearDigital(0);
+        JComboBox<String> selector = g.panel().getComboCanal();
+        enSwing(() -> new ControlSeleccion(selector, g.grafica()));
+
+        AtomicBoolean enviando = new AtomicBoolean(true);
+        AtomicLong enviadas = new AtomicLong();
+        AtomicReference<Throwable> errorProductor = new AtomicReference<>();
+        Thread productor = new Thread(() -> {
+            long i = 0;
+            while (enviando.get()) {
+                enviarRapida(g, i);
+                i++;
+                pausar(2);
+            }
+            enviadas.set(i);
+        }, "Muestreador de prueba");
+        productor.setUncaughtExceptionHandler(guardarEImprimir(errorProductor));
+
+        Random azar = new Random(19);
+        int canal = 0;
+        int paso = 1; // 1 baja por la lista (↓), -1 sube (↑)
+        int fallas = 0;
+        long inicio = System.nanoTime();
+        productor.start();
+        for (int k = 0; k < CAMBIOS_POR_RONDA; k++) {
+            if (canal + paso < 0 || canal + paso >= CANALES_DIGITALES) {
+                paso = -paso; // en un extremo de la lista, la otra flecha
+            }
+            int nuevo = canal + paso;
+            fallas += enSwing(() -> {
+                List<Integer> antes = tamanosSeries(g);
+                selector.setSelectedIndex(nuevo);
+                int mal = tamanosSeries(g).equals(antes) ? 0 : 1;
+                if (g.grafica().getCanal() != nuevo
+                        || !g.chart().getTitle().getText().equals("Seleccionada: D" + nuevo)
+                        || !nombreResaltado(coloresNombres(g), nuevo)) {
+                    mal++;
+                }
+                return mal + incoherencias(g.grafica().getHistorial(), nuevo);
+            });
+            canal = nuevo;
+            pausar(azar.nextInt(400));
+        }
+        enviando.set(false);
+        productor.join();
+        double segundos = (System.nanoTime() - inicio) / 1e9;
+
+        // 3000 muestras más, ya sin cambios, y se revisa lo dibujado
+        long fin = enviadas.get();
+        for (long i = fin; i < fin + 3000; i++) {
+            enviarRapida(g, i);
+        }
+        long ultima = (fin + 2999) % MUESTRAS_POR_CORRIDA;
+        boolean dibujo = esperarDibujoDigital(g, tiempoRapido(ultima));
+        int ultimo = canal;
+        int fallasFinales = enSwing(() -> {
+            int mal = selector.getSelectedIndex() == ultimo && g.grafica().getCanal() == ultimo ? 0 : 1;
+            List<SerieEnVivo.Punto> historial = g.grafica().getHistorial();
+            mal += historial.size() == ultima + 1 ? 0 : 1;
+            mal += incoherencias(historial, ultimo);
+            mal += dibujadoDistinto(g, historial);
+            return mal + (resaltada(fotoDigital(g), ultimo) ? 0 : 1);
+        });
+
+        verificar(String.format("Recorrer el selector como con las flechas ↓ y ↑ (%d cambios de una "
+                                + "posición) mientras otro hilo envía muestras sin parar (%,d muestras en "
+                                + "%.1f s): en cada paso la gráfica sigue al selector (señal, título y "
+                                + "nombre en rojo), nada se borra y el historial entregado es el de la "
+                                + "señal elegida; al final los 5 carriles dibujan lo enviado (D%d)",
+                        CAMBIOS_POR_RONDA, enviadas.get(), segundos, ultimo),
+                errorProductor.get() == null && fallas == 0 && dibujo && fallasFinales == 0,
+                errorProductor.get() != null ? errorProductor.get().toString()
+                        : fallas + " fallas durante los cambios, " + fallasFinales + " al final");
+    }
+
+    /**
+     * Las dos pestañas conectadas como en Main, cada una con su gráfica y su
+     * ControlSeleccion, y las mismas muestras llegando a las dos (como hace
+     * el Muestreador con sus oyentes): la analógica sigue funcionando igual
+     * que en I7LV-16 y ninguna se entera de lo que se elige en la otra.
+     */
+    private static void verificarAnalogicaSigueIgual() throws Exception {
+        GraficaDePrueba analogica = crearGrafica(0);
+        DigitalDePrueba digital = crearDigital(0);
+        JComboBox<String> selectorAnalogico = analogica.panel().getComboCanal();
+        JComboBox<String> selectorDigital = digital.panel().getComboCanal();
+        enSwing(() -> {
+            new ControlSeleccion(selectorAnalogico, analogica.grafica());
+            new ControlSeleccion(selectorDigital, digital.grafica());
+            return null;
+        });
+        int hasta = 5 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarAAmbas(analogica, digital, 0, hasta);
+        boolean dibujo = esperarDibujo(analogica, tiempo(hasta - 1))
+                && esperarDibujoDigital(digital, tiempo(hasta - 1));
+
+        List<FotoAmbas> eleccionDigital = enSwing(() -> {
+            FotoAmbas previa = fotoAmbas(analogica, digital);
+            selectorDigital.setSelectedItem("D2");
+            return List.of(previa, fotoAmbas(analogica, digital));
+        });
+        FotoAmbas trasD2 = eleccionDigital.get(1);
+        int pedidos = enSwing(() -> analogica.grafica().pedidosDeCambio);
+        verificar("Con las dos pestañas conectadas como en Main, elegir D2 en el selector digital no toca "
+                        + "la gráfica analógica: sigue en A0, con su título, su serie y su historial",
+                dibujo && trasD2.digital().canal() == 2 && trasD2.analogica().canal() == 0
+                        && trasD2.analogica().equals(eleccionDigital.get(0).analogica())
+                        && trasD2.analogica().historial().size() == hasta && pedidos == 0,
+                describir(trasD2.analogica()) + "; cambios pedidos a la analógica: " + pedidos);
+
+        List<FotoAmbas> eleccionAnalogica = enSwing(() -> {
+            FotoAmbas previa = fotoAmbas(analogica, digital);
+            selectorAnalogico.setSelectedItem("A3");
+            return List.of(previa, fotoAmbas(analogica, digital));
+        });
+        Foto a3 = eleccionAnalogica.get(1).analogica();
+        verificar("Elegir A3 en el selector analógico funciona igual que en I7LV-16: canal 3, título "
+                        + "\"Canal A3\", serie e historial vacíos",
+                a3.canal() == 3 && a3.titulo().equals("Canal A3")
+                        && a3.valoresSerie().isEmpty() && a3.historial().isEmpty(),
+                describir(a3));
+        verificar("... y no toca la gráfica digital: sigue D2 seleccionada, con todo lo dibujado y su historial",
+                eleccionAnalogica.get(1).digital().equals(eleccionAnalogica.get(0).digital())
+                        && eleccionAnalogica.get(1).digital().canal() == 2,
+                "antes: " + describir(eleccionAnalogica.get(0).digital())
+                        + "; después: " + describir(eleccionAnalogica.get(1).digital()));
+
+        // El muestreo sigue: las mismas muestras llegan a las dos gráficas
+        int mas = hasta + 2 * MUESTRAS_POR_SEGUNDO;
+        enviarAAmbas(analogica, digital, hasta, mas);
+        dibujo = esperarDibujo(analogica, tiempo(mas - 1)) && esperarDibujoDigital(digital, tiempo(mas - 1));
+        FotoAmbas luego = enSwing(() -> fotoAmbas(analogica, digital));
+        verificar("... y después la analógica solo registra y dibuja A3 (1,5 V), mientras la digital "
+                        + "sigue registrando todo: el historial de D2 tiene sus 701 muestras",
+                dibujo && luego.analogica().historial().size() == mas - hasta
+                        && soloVale(valores(luego.analogica().historial()), valorCanal(3))
+                        && soloVale(luego.analogica().valoresSerie(), valorCanal(3))
+                        && diferencias(luego.digital().historial(), 2, mas, VerificacionSprint2::patron) == 0,
+                describir(luego.analogica()) + "; " + describir(luego.digital()));
+    }
+
+    // ===================== Utilidades de I7LV-19 =====================
+
+    /** Mínimo de píxeles para dar por dibujado un nombre: "D0" en negrita de 13 tiene unos 70. */
+    private static final int PIXELES_NOMBRE = 30;
+
+    /** Lo que muestran las dos gráficas, la analógica y la digital, en un mismo instante. */
+    private record FotoAmbas(Foto analogica, FotoDigital digital) {
+    }
+
+    /**
+     * Píxeles de la gráfica digital dibujada: rojos y negros en la zona del
+     * nombre de cada carril (a la izquierda de su área de dibujo y a su misma
+     * altura), de D0 a D3 y Valor, y rojos en toda la imagen.
+     */
+    private record NombresDibujados(List<Integer> rojos, List<Integer> negros, int rojosEnTotal) {
+
+        @Override
+        public String toString() {
+            return "píxeles rojos por carril " + rojos + ", negros " + negros
+                    + ", rojos en toda la imagen " + rojosEnTotal;
+        }
+    }
+
+    /** Toma la foto de las dos gráficas. Se llama en el hilo de Swing. */
+    private static FotoAmbas fotoAmbas(GraficaDePrueba analogica, DigitalDePrueba digital) {
+        return new FotoAmbas(foto(analogica), fotoDigital(digital));
+    }
+
+    /**
+     * Si el nombre del carril de la señal está en rojo y los de los demás
+     * carriles, incluido Valor, en negro.
+     *
+     * @param colores color del nombre de cada carril, de D0 a D3 y Valor
+     */
+    private static boolean nombreResaltado(List<Paint> colores, int canal) {
+        for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+            if (!colores.get(carril).equals(carril == canal ? Tema.ROJO : Tema.NEGRO)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Si en el dibujo el nombre de la señal es rojo (sin nada negro) y el de
+     * cada uno de los demás carriles es negro (sin nada rojo). Con la gráfica
+     * vacía, además, no debe haber ningún otro píxel rojo en toda la imagen;
+     * con datos está también la línea roja de la señal.
+     */
+    private static boolean nombreRojoEnDibujo(NombresDibujados d, int canal, boolean vacia) {
+        for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+            boolean bien = carril == canal
+                    ? d.rojos().get(carril) >= PIXELES_NOMBRE && d.negros().get(carril) == 0
+                    : d.rojos().get(carril) == 0 && d.negros().get(carril) >= PIXELES_NOMBRE;
+            if (!bien) {
+                return false;
+            }
+        }
+        return !vacia || d.rojosEnTotal() == d.rojos().get(canal);
+    }
+
+    /**
+     * Dibuja la gráfica digital en una imagen, como lo hace el ChartPanel, al
+     * tamaño que tiene en la ventana de 1000 × 700, y cuenta sus píxeles
+     * rojos y negros (ver NombresDibujados). El área de dibujo de cada carril
+     * sale de la información que JFreeChart registra al dibujar.
+     */
+    private static NombresDibujados dibujarNombres(DigitalDePrueba g) throws Exception {
+        return enSwing(() -> {
+            BufferedImage imagen = new BufferedImage(1000, 560, BufferedImage.TYPE_INT_RGB);
+            ChartRenderingInfo info = new ChartRenderingInfo();
+            Graphics2D g2 = imagen.createGraphics();
+            g.chart().draw(g2, new Rectangle(0, 0, 1000, 560), null, info);
+            g2.dispose();
+
+            int rojosEnTotal = 0;
+            for (int y = 0; y < imagen.getHeight(); y++) {
+                for (int x = 0; x < imagen.getWidth(); x++) {
+                    if (esRojo(imagen.getRGB(x, y))) {
+                        rojosEnTotal++;
+                    }
+                }
+            }
+            List<Integer> rojos = new ArrayList<>();
+            List<Integer> negros = new ArrayList<>();
+            for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+                Rectangle2D area = info.getPlotInfo().getSubplotInfo(carril).getDataArea();
+                int r = 0;
+                int n = 0;
+                for (int y = (int) Math.ceil(area.getMinY()); y < area.getMaxY(); y++) {
+                    for (int x = 0; x < area.getMinX(); x++) {
+                        int pixel = imagen.getRGB(x, y);
+                        if (esRojo(pixel)) {
+                            r++;
+                        } else if (esNegro(pixel)) {
+                            n++;
+                        }
+                    }
+                }
+                rojos.add(r);
+                negros.add(n);
+            }
+            return new NombresDibujados(rojos, negros, rojosEnTotal);
+        });
+    }
+
+    /**
+     * Píxel rojo: el de Tema (204, 0, 0) o casi. En el borde de las letras el
+     * suavizado mezcla el color con el blanco del fondo; esos píxeles claros
+     * no cuentan ni como rojos ni como negros.
+     */
+    private static boolean esRojo(int rgb) {
+        int rojo = (rgb >> 16) & 0xFF;
+        int verde = (rgb >> 8) & 0xFF;
+        int azul = rgb & 0xFF;
+        return rojo >= 140 && verde <= 100 && azul <= 100;
+    }
+
+    /** Píxel negro o casi negro. */
+    private static boolean esNegro(int rgb) {
+        int rojo = (rgb >> 16) & 0xFF;
+        int verde = (rgb >> 8) & 0xFF;
+        int azul = rgb & 0xFF;
+        return rojo <= 100 && verde <= 100 && azul <= 100;
+    }
+
+    /**
+     * El historial de cada señal, eligiéndola en el selector de la pestaña
+     * como lo haría el usuario antes de guardar; al final vuelve a elegir la
+     * que estaba. Si el selector no estuviera conectado, los cuatro serían el
+     * de la misma señal.
+     */
+    private static List<List<SerieEnVivo.Punto>> historialesPorSelector(DigitalDePrueba g) throws Exception {
+        return enSwing(() -> {
+            JComboBox<String> selector = g.panel().getComboCanal();
+            int elegida = selector.getSelectedIndex();
+            List<List<SerieEnVivo.Punto>> lista = new ArrayList<>();
+            for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+                selector.setSelectedIndex(canal);
+                lista.add(g.grafica().getHistorial());
+            }
+            selector.setSelectedIndex(elegida);
+            return lista;
+        });
+    }
+
+    /**
+     * Envía las mismas muestras a las dos gráficas, como el Muestreador a sus
+     * oyentes: el canal Ai vale i × 0,5 V y los bits son los de patron().
+     */
+    private static void enviarAAmbas(GraficaDePrueba analogica, DigitalDePrueba digital, int desde, int hasta) {
+        for (int i = desde; i < hasta; i++) {
+            Muestra muestra = muestraDigital(tiempo(i), patron(i));
+            analogica.grafica().muestraRecibida(muestra);
+            digital.grafica().muestraRecibida(muestra);
+        }
     }
 
     // ===================== Utilidades =====================
@@ -1977,6 +2631,7 @@ public class VerificacionSprint2 {
     }
 
     private static void titulo(String texto) {
+        seccionActual = texto;
         System.out.println();
         System.out.println("--- " + texto + " ---");
     }

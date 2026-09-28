@@ -14,6 +14,7 @@ import laboratoriovirtual.muestreo.Muestreador;
 import laboratoriovirtual.muestreo.OyenteMuestras;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.axis.NumberAxis;
+import org.jfree.chart.axis.ValueAxis;
 import org.jfree.chart.plot.CombinedDomainXYPlot;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
@@ -33,11 +34,14 @@ import org.jfree.data.xy.XYSeriesCollection;
  * Cinco carriles apilados que comparten el eje X "Tiempo (s)", de arriba abajo:
  * - D0, D1, D2 y D3: onda cuadrada en escalones, 0 abajo y 1 arriba. La señal
  *   seleccionada va en rojo y con trazo más grueso; las demás, en gris oscuro.
+ *   El nombre del carril, a la izquierda, va en rojo en la seleccionada y en
+ *   negro en las demás (I7LV-19).
  * - Valor: los 4 bits combinados como un dígito hexadecimal, estilo bus
  *   (RendererBus). D3 es el bit más significativo: D3 = 1, D2 = 0, D1 = 1 y
  *   D0 = 0 es "A".
  * La ventana de 30 s es la misma de la gráfica analógica, y el título dice
- * cuál es la señal seleccionada ("Seleccionada: D0").
+ * cuál es la señal seleccionada ("Seleccionada: D0"). La elige el selector
+ * de la pestaña, conectado en Main con ControlSeleccion (I7LV-19).
  *
  * Por qué no hereda de GraficaSenal: esa clase es para una sola señal, y su
  * cambio de canal vacía la gráfica y el historial. Aquí se registran siempre
@@ -54,8 +58,9 @@ import org.jfree.data.xy.XYSeriesCollection;
  *   SenalesDigitalesEnVivo: trabajo trivial, sin tocar JFreeChart ni Swing.
  * - Un javax.swing.Timer de 50 ms, en el hilo de Swing, pasa las lecturas
  *   pendientes a los cinco carriles y redibuja la gráfica una sola vez.
- * - cambiarCanal() se llama desde el hilo de Swing. Solo cambia colores y
- *   título, que únicamente se tocan en ese hilo; no toca los datos, así que
+ * - cambiarCanal() se llama desde el hilo de Swing. Solo cambia colores (de
+ *   las líneas y de los nombres), trazos y título, que únicamente se tocan
+ *   en ese hilo; no toca los datos, así que
  *   no necesita el candado y no puede mezclar muestras de nada.
  *
  * Es final: así se registra como oyente al final del constructor sin que una
@@ -92,6 +97,9 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
 
     // Renderer de cada carril de señal, para cambiar su color y su trazo
     private final XYItemRenderer[] escalones = new XYItemRenderer[CANALES];
+
+    // Eje Y de cada carril de señal, para cambiar el color de su nombre
+    private final ValueAxis[] ejesCarriles = new ValueAxis[CANALES];
 
     private final JFreeChart grafica;
 
@@ -138,8 +146,10 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
         areaDibujo.setGap(ESPACIO_ENTRE_CARRILES);
         for (int i = 0; i < CANALES; i++) {
             escalones[i] = new XYStepRenderer();
+            XYPlot carril = crearCarril(nombresCanales.get(i), datos.getSerieCanal(i), escalones[i]);
+            ejesCarriles[i] = carril.getRangeAxis();
             resaltar(i, i == canal);
-            areaDibujo.add(crearCarril(nombresCanales.get(i), datos.getSerieCanal(i), escalones[i]));
+            areaDibujo.add(carril);
         }
         areaDibujo.add(crearCarril(NOMBRE_VALOR, datos.getSerieValor(), new RendererBus()));
 
@@ -194,13 +204,13 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
 
     /**
      * Cambia la señal seleccionada: la nueva pasa a rojo y con trazo grueso,
-     * la anterior vuelve a gris oscuro, y el título pasa a ser, por ejemplo,
-     * "Seleccionada: D2". NO borra la gráfica ni los historiales: los cuatro
-     * canales se siguen registrando igual. Elegir la que ya está
-     * seleccionada no hace nada.
+     * con su nombre en rojo; la anterior vuelve a gris oscuro, con su nombre
+     * en negro; y el título pasa a ser, por ejemplo, "Seleccionada: D2". NO
+     * borra la gráfica ni los historiales: los cuatro canales se siguen
+     * registrando igual. Elegir la que ya está seleccionada no hace nada.
      *
-     * Es el método que usará ControlSeleccion cuando se conecte el selector
-     * de la pestaña (I7LV-19). Se llama desde el hilo de Swing.
+     * Lo llama ControlSeleccion cada vez que se elige otra señal en el
+     * selector de la pestaña (I7LV-19). Se llama desde el hilo de Swing.
      *
      * @param nuevoCanal posición de la señal en el selector de la pestaña
      * @throws IllegalArgumentException si el canal no existe; en ese caso la
@@ -213,8 +223,8 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
         if (nuevoCanal == anterior) {
             return;
         }
-        // Con los avisos de la gráfica apagados, los tres cambios llegan al
-        // ChartPanel como un solo redibujo
+        // Con los avisos de la gráfica apagados, todos los cambios (colores,
+        // trazos, nombres y título) llegan al ChartPanel como un solo redibujo
         grafica.setNotify(false);
         try {
             resaltar(anterior, false);
@@ -271,10 +281,17 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
         return "Seleccionada: " + nombresCanales.get(canal);
     }
 
-    /** Color y trazo del carril de una señal: rojo y grueso si es la seleccionada. */
+    /**
+     * Resaltado del carril de una señal. La seleccionada: línea roja y
+     * gruesa, y su nombre en rojo. Las demás: línea gris oscuro y delgada, y
+     * su nombre en negro, como el resto de los textos de la gráfica.
+     */
     private void resaltar(int canal, boolean seleccionada) {
         escalones[canal].setSeriesPaint(0, seleccionada ? Tema.ROJO : Tema.GRIS_OSCURO);
         escalones[canal].setSeriesStroke(0, seleccionada ? TRAZO_SELECCIONADA : TRAZO_NORMAL);
+        // El nombre es el rótulo del eje Y del carril, y el eje se dibuja
+        // aunque no haya datos: se ve también con la gráfica vacía
+        ejesCarriles[canal].setLabelPaint(seleccionada ? Tema.ROJO : Tema.NEGRO);
     }
 
     // ===================== Construcción de la gráfica =====================

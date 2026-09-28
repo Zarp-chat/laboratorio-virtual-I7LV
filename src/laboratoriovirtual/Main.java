@@ -49,11 +49,14 @@ public class Main {
 
             // Gráfica en vivo de la pestaña "Señal digital": diagrama de
             // tiempos con D0 a D3 y el valor en hexadecimal. Arranca con D0
-            // resaltada. Queda en una variable porque la conexión con el
-            // selector de la pestaña (I7LV-19) y el guardado de la señal
-            // (Sprint 3) la necesitarán.
+            // seleccionada y el selector de la pestaña elige cuál se
+            // resalta, sin borrar nada. Queda en una variable porque el
+            // guardado de la señal (Sprint 3) la necesitará: guarda la
+            // señal seleccionada.
             GraficaDigital graficaDigital = new GraficaDigital(
                     muestreador, ventana.getPanelDigital(), 0);
+            new ControlSeleccion(ventana.getPanelDigital().getComboCanal(),
+                    graficaDigital);
 
             // Al cerrar la ventana se detiene el muestreo y se libera la fuente.
             // En el Laboratorio 2 esto cierra el puerto serie.

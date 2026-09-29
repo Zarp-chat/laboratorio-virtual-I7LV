@@ -70,7 +70,7 @@ final class EstiloGrafica {
         // Sin zoom con el ratón ni menú emergente (clic derecho), porque
         // rompen la ventana deslizante:
         // - El zoom cambia el rango de los ejes, pero el Timer de la gráfica
-        //   vuelve a fijar el eje X en la ventana de 30 s cada 50 ms, así que
+        //   vuelve a fijar el eje X en la ventana visible cada 50 ms, así que
         //   el zoom se desharía solo. Y "alejar" o "restaurar" encienden el
         //   rango automático: el eje Y dejaría de estar fijo.
         // - El menú repite esas opciones de zoom y además trae "Guardar

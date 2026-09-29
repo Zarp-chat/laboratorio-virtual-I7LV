@@ -211,13 +211,22 @@ public class ControlMuestreo implements OyenteMuestras {
     public static String textoEstado(boolean corriendo, boolean habilitado, int periodoMs, long muestras) {
         if (corriendo) {
             return "● Muestreando · cada " + periodoMs + " ms · "
-                    + String.format(FORMATO_REGIONAL, "%,d", muestras)
+                    + conSeparadorDeMiles(muestras)
                     + (muestras == 1 ? " muestra" : " muestras");
         } else if (habilitado) {
             return "Detenido · cada " + periodoMs + " ms";
         } else {
             return "Sin conexión con la fuente de datos";
         }
+    }
+
+    /**
+     * El número con los miles separados por punto, como en la barra de
+     * estado: 12.345. También lo usa ControlGuardado (I7LV-25), así el aviso
+     * de guardado cuenta las muestras con el mismo formato.
+     */
+    static String conSeparadorDeMiles(long numero) {
+        return String.format(FORMATO_REGIONAL, "%,d", numero);
     }
 
     /** Vuelve a poner en el campo el tiempo vigente. */

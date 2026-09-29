@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.IntToDoubleFunction;
 import java.util.function.IntUnaryOperator;
 import java.util.function.Supplier;
 import javax.swing.JComboBox;
@@ -36,12 +37,16 @@ import laboratoriovirtual.control.CanalSeleccionable;
 import laboratoriovirtual.control.ControlMuestreo;
 import laboratoriovirtual.control.ControlSalidas;
 import laboratoriovirtual.control.ControlSeleccion;
+import laboratoriovirtual.control.ControlVisualizacion;
+import laboratoriovirtual.control.EscalaAjustable;
+import laboratoriovirtual.control.EscalaVertical;
 import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.control.GraficaDigital;
 import laboratoriovirtual.control.GraficaSenal;
 import laboratoriovirtual.control.RendererBus;
 import laboratoriovirtual.control.SenalesDigitalesEnVivo;
 import laboratoriovirtual.control.SerieEnVivo;
+import laboratoriovirtual.control.VentanaAjustable;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.datos.FuenteDeDatosException;
 import laboratoriovirtual.gui.BarraEstado;
@@ -56,6 +61,7 @@ import laboratoriovirtual.muestreo.Muestreador;
 import org.jfree.chart.ChartPanel;
 import org.jfree.chart.ChartRenderingInfo;
 import org.jfree.chart.JFreeChart;
+import org.jfree.chart.axis.ValueAxis;
 import org.jfree.chart.event.ChartChangeListener;
 import org.jfree.chart.plot.CombinedDomainXYPlot;
 import org.jfree.chart.plot.XYPlot;
@@ -66,7 +72,7 @@ import org.jfree.data.xy.XYSeriesCollection;
 
 /**
  * Verifica las tareas del Sprint 2 (I7LV-17, I7LV-16, I7LV-20, I7LV-19,
- * I7LV-21, I7LV-22 e I7LV-18 fase A) sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
+ * I7LV-21, I7LV-22 e I7LV-18 fases A y B) sin abrir ninguna ventana. Se ejecuta con Shift+F6 y muestra una línea
  * [OK] o [FALLA] por criterio, igual que VerificacionSprint1. Una excepción
  * no capturada, en cualquier hilo, se imprime completa y cuenta como FALLA;
  * el programa nunca se queda colgado por ella (ver main()).
@@ -116,11 +122,19 @@ import org.jfree.data.xy.XYSeriesCollection;
  * la etiqueta no cambie de ancho con el contador. Con el ControlSalidas real
  * revisa que los LEDs de la pestaña Salidas cambien junto con las etiquetas,
  * y dibuja un LedIndicador en una imagen para revisar sus colores.
+ *
+ * I7LV-18 fase B: cambia la ventana visible y la escala vertical en los
+ * datos (SerieEnVivo, SenalesDigitalesEnVivo) y en las gráficas reales,
+ * también a través de ControlVisualizacion como lo haría el usuario. Revisa
+ * la reconstrucción desde el historial, los ejes, el punto anterior al borde
+ * izquierdo, el eje X después de un cambio de canal (también con un
+ * Muestreador real corriendo, a 10 ms y a 1000 ms), la concurrencia y el
+ * rendimiento con la ventana de 1 min.
  */
 public class VerificacionSprint2 {
 
     /** Ancho de la ventana visible, el mismo de las gráficas del programa. */
-    private static final double VENTANA_S = GraficaSenal.VENTANA_VISIBLE_S;
+    private static final double VENTANA_S = GraficaSenal.VENTANA_POR_DEFECTO_S;
 
     /** Muestras por segundo con el tiempo de muestreo mínimo (10 ms). */
     private static final int MUESTRAS_POR_SEGUNDO = 100;
@@ -233,7 +247,7 @@ public class VerificacionSprint2 {
         System.out.println("===================================");
         System.out.println("Resultado: " + aprobados + " aprobados, " + fallidos + " fallidos");
         System.out.println(fallidos == 0
-                ? "I7LV-17, I7LV-16, I7LV-20, I7LV-19, I7LV-21, I7LV-22 e I7LV-18 (fase A) cumplen sus criterios."
+                ? "I7LV-17, I7LV-16, I7LV-20, I7LV-19, I7LV-21, I7LV-22 e I7LV-18 (fases A y B) cumplen sus criterios."
                 : "Hay criterios sin cumplir: revisa las líneas [FALLA].");
         System.exit(fallidos == 0 ? 0 : 1);
     }
@@ -301,6 +315,22 @@ public class VerificacionSprint2 {
         verificarDibujoLed();
 
         revisarErroresEnOtrosHilos("I7LV-18 fase A");
+
+        titulo("I7LV-18 fase B  Base de tiempo y escala vertical (datos y gráficas reales, sin ventana)");
+
+        verificarValoresPorDefecto();
+        verificarControlVisualizacion();
+        verificarVentanaEnDatos();
+        verificarEjeConVentana();
+        verificarEscalas();
+        verificarHuecoIzquierda();
+        verificarEjeTrasCambioDeCanal();
+        verificarVentanaDigitalFaseB();
+        verificarVentanaConcurrente();
+        verificarRendererEscalones();
+        verificarRendimientoVentanaMinuto();
+
+        revisarErroresEnOtrosHilos("I7LV-18 fase B");
     }
 
     // ===================== Excepciones no capturadas =====================
@@ -967,7 +997,12 @@ public class VerificacionSprint2 {
         int pedidosDeCambio = 0;
 
         GraficaContada(PanelSenal panel, int canal) {
-            super(MUESTREADOR, panel, canal);
+            this(MUESTREADOR, panel, canal);
+        }
+
+        /** Con otro Muestreador, que la prueba sí inicia (I7LV-18 fase B). */
+        GraficaContada(Muestreador muestreador, PanelSenal panel, int canal) {
+            super(muestreador, panel, canal);
         }
 
         @Override
@@ -3623,6 +3658,1215 @@ public class VerificacionSprint2 {
 
     private static String rgb(Color c) {
         return "RGB " + c.getRed() + ", " + c.getGreen() + ", " + c.getBlue();
+    }
+
+    // ===================== I7LV-18 fase B: base de tiempo y escala vertical =====================
+
+    /** Duración de cada opción del selector "Ventana:", en el orden en que aparecen. */
+    private static final double[] VENTANAS_S = { 1, 5, 10, 30, 60 };
+
+    /** Textos del selector "Ventana:". */
+    private static final List<String> TEXTOS_VENTANA = List.of("1 s", "5 s", "10 s", "30 s", "1 min");
+
+    /** Textos del selector "Escala:". */
+    private static final List<String> TEXTOS_ESCALA = List.of("0 a 5 V", "0 a 3,3 V", "Automática");
+
+    /**
+     * En la prueba de concurrencia, muestras que el otro hilo puede enviar
+     * entre dos cambios de ventana (como MUESTRAS_POR_CAMBIO en I7LV-16):
+     * así el historial no pasa de 300 000 puntos y copiarlo en cada cambio
+     * no hace lenta la prueba.
+     */
+    private static final int MUESTRAS_POR_CAMBIO_VENTANA = 300;
+
+    private static void verificarValoresPorDefecto() throws Exception {
+        GraficaDePrueba g = crearGrafica(0);
+        DigitalDePrueba d = crearDigital(0);
+        Vista analogica = enSwing(() -> vista(g));
+        Vista digital = enSwing(() -> vistaDigital(d));
+        verificar("Por defecto la ventana es de 30 s en las dos gráficas, con el eje X de 0 a 30 s, y la escala "
+                        + "de la analógica es \"0 a 5 V\", con el eje Y de 0 a 5 V",
+                analogica.equals(new Vista(30, 0, 30, EscalaVertical.CERO_A_5_V, 0, 5))
+                        && digital.equals(new Vista(30, 0, 30, null, Double.NaN, Double.NaN)),
+                "analógica: " + analogica + "; digital: " + digital);
+
+        Selectores enAnalogica = enSwing(() -> {
+            controlVisualizacion(g.panel(), g.grafica());
+            return selectores(g.panel());
+        });
+        Selectores enDigital = enSwing(() -> {
+            controlVisualizacion(d.panel(), d.grafica());
+            return selectores(d.panel());
+        });
+        Vista analogicaDespues = enSwing(() -> vista(g));
+        Vista digitalDespues = enSwing(() -> vistaDigital(d));
+        verificar("ControlVisualizacion pone las opciones de ventana (1 s, 5 s, 10 s, 30 s y 1 min) y de escala "
+                        + "(0 a 5 V, 0 a 3,3 V y Automática), deja elegidas \"30 s\" y \"0 a 5 V\", y crearlo no "
+                        + "cambia ninguna de las dos gráficas",
+                enAnalogica.ventanas().equals(TEXTOS_VENTANA) && "30 s".equals(enAnalogica.ventanaElegida())
+                        && enAnalogica.escalas().equals(TEXTOS_ESCALA)
+                        && "0 a 5 V".equals(enAnalogica.escalaElegida())
+                        && enDigital.ventanas().equals(TEXTOS_VENTANA) && "30 s".equals(enDigital.ventanaElegida())
+                        && analogicaDespues.equals(analogica) && digitalDespues.equals(digital),
+                "analógica: " + enAnalogica + ", " + analogicaDespues + "; digital: " + enDigital + ", "
+                        + digitalDespues);
+    }
+
+    /**
+     * ControlVisualizacion con una gráfica de prueba que solo cuenta lo que
+     * le piden (GraficaDeVistaContada), en una pestaña que nunca se muestra.
+     */
+    private static void verificarControlVisualizacion() throws Exception {
+        GraficaDeVistaContada contada = new GraficaDeVistaContada();
+        List<String> pedidos = enSwing(() -> {
+            PanelSenal panel = new PanelSenal(nombresAnalogicos());
+            JComboBox<String> ventana = panel.getComboVentana();
+            JComboBox<String> escala = panel.getComboEscala();
+            controlVisualizacion(panel, contada);
+            int[] avisosAction = {0};
+            ventana.addActionListener(e -> avisosAction[0]++);
+            ventana.setSelectedIndex(3); // 30 s: la que ya tiene
+            escala.setSelectedIndex(0); // 0 a 5 V: la que ya tiene
+            String alRepetir = contada.pedidos + " pedidos, " + avisosAction[0] + " ActionEvent";
+            ventana.setSelectedIndex(0); // 1 s
+            escala.setSelectedIndex(2); // automática
+            ventana.setSelectedIndex(0); // otra vez 1 s
+            return List.of(alRepetir, contada.pedidos.toString());
+        });
+        verificar("ControlVisualizacion solo atiende cambios reales: volver a elegir la ventana y la escala que ya "
+                        + "tiene la gráfica no le pide nada (aunque el selector avise con ActionEvent), y elegir 1 s y "
+                        + "Automática le pide exactamente esos dos cambios",
+                pedidos.get(0).equals("[] pedidos, 1 ActionEvent")
+                        && pedidos.get(1).equals("[ventana 1.0, escala Automática]"),
+                "al repetir: " + pedidos.get(0) + "; en total: " + pedidos.get(1));
+
+        GraficaDeVistaContada rara = new GraficaDeVistaContada();
+        rara.ventana = 20;
+        boolean rechazado = enSwing(() -> {
+            PanelSenal panel = new PanelSenal(nombresAnalogicos());
+            try {
+                controlVisualizacion(panel, rara);
+                return false;
+            } catch (IllegalArgumentException e) {
+                return true;
+            }
+        });
+        verificar("Si la ventana de la gráfica (20 s) no es una de las opciones, ControlVisualizacion lo rechaza con "
+                        + "IllegalArgumentException en vez de mostrar otra",
+                rechazado, "se aceptó");
+    }
+
+    /**
+     * La ventana en SerieEnVivo, sin gráfica, con muestras a 10 ms. Los
+     * bordes de las ventanas caen justo en una muestra (por ejemplo, 35,00 s),
+     * así la serie esperada es exactamente el tramo del historial.
+     */
+    private static void verificarVentanaEnDatos() {
+        SerieEnVivo datos = new SerieEnVivo(VENTANA_S);
+        XYSeries serie = datos.getSerie();
+        int a45 = 45 * MUESTRAS_POR_SEGUNDO + 1;
+        alimentar(datos, 0, a45);
+        List<SerieEnVivo.Punto> historial45 = datos.getHistorial();
+
+        datos.setVentanaVisible(10);
+        boolean achicada = puntos(serie).equals(historial45.subList(35 * MUESTRAS_POR_SEGUNDO, a45))
+                && datos.getInicioVentana() == 35.0 && datos.getFinVentana() == 45.0;
+        boolean historialIgual = datos.getHistorial().equals(historial45);
+        verificar("Achicar la ventana de 30 a 10 s recorta la serie dibujada: quedan los 1001 puntos de 35,00 a "
+                        + "45,00 s y el eje X va de 35 a 45 s",
+                achicada, "la serie tiene " + serie.getItemCount() + " puntos; " + rango(datos));
+
+        datos.setVentanaVisible(60);
+        boolean agrandada = puntos(serie).equals(historial45)
+                && datos.getInicioVentana() == 0.0 && datos.getFinVentana() == 60.0;
+        historialIgual &= datos.getHistorial().equals(historial45);
+        verificar("Agrandarla a 1 min la reconstruye desde el historial: reaparecen los puntos de 0 a 35 s que ya "
+                        + "habían salido (la serie vuelve a tener los 4501) y el eje X va de 0 a 60 s",
+                agrandada, "la serie tiene " + serie.getItemCount() + " puntos; " + rango(datos));
+
+        // Hasta 90 s: la ventana de 1 min ya se desliza
+        int a90 = 90 * MUESTRAS_POR_SEGUNDO + 1;
+        alimentar(datos, a45, a90);
+        List<SerieEnVivo.Punto> historial90 = datos.getHistorial();
+        StringBuilder detalle = new StringBuilder();
+        boolean deslizada = true;
+        double[] anchos = { 60, 1, 30 };
+        for (double ancho : anchos) {
+            datos.setVentanaVisible(ancho);
+            int desde = (int) Math.round((90 - ancho) * MUESTRAS_POR_SEGUNDO);
+            boolean bien = puntos(serie).equals(historial90.subList(desde, a90))
+                    && datos.getInicioVentana() == 90.0 - ancho && datos.getFinVentana() == 90.0;
+            deslizada &= bien;
+            historialIgual &= datos.getHistorial().equals(historial90);
+            detalle.append(ancho).append(" s: ").append(serie.getItemCount()).append(" puntos, ")
+                    .append(rango(datos)).append("; ");
+        }
+        verificar("Con 90 s de datos pasa lo mismo: con 1 min la serie va de 30 a 90 s, con 1 s de 89 a 90 s y "
+                        + "con 30 s de 60 a 90 s, siempre con los puntos del historial que caen en la ventana",
+                deslizada, detalle.toString());
+        verificar("El historial no cambia en ningún caso: después de cada cambio de ventana es el mismo (4501 "
+                        + "puntos a los 45 s, 9001 a los 90 s)",
+                historialIgual, "el historial tiene " + datos.getHistorial().size() + " puntos");
+
+        // Puntos recibidos que el Timer todavía no dibujaba
+        for (int i = a90; i < a90 + 5; i++) {
+            datos.agregar(tiempo(i), valor(i));
+        }
+        datos.setVentanaVisible(5);
+        boolean sinPendientes = !datos.hayPendientes();
+        List<SerieEnVivo.Punto> tras = puntos(serie);
+        datos.procesarPendientes();
+        List<SerieEnVivo.Punto> historial = datos.getHistorial();
+        verificar("Con 5 puntos recibidos que el Timer aún no dibujaba, cambiar la ventana los dibuja una sola vez: "
+                        + "la serie es el tramo de 5 s que termina en ellos, sin repetidos, y ya no quedan pendientes",
+                sinPendientes && tras.equals(tramoEsperado(historial, 5)) && puntos(serie).equals(tras)
+                        && serie.getX(serie.getItemCount() - 1).doubleValue() == tiempo(a90 + 4),
+                "la serie tiene " + tras.size() + " puntos, pendientes: " + !sinPendientes);
+
+        // Un nuevo Iniciar todavía sin dibujar
+        datos.agregar(0.0, 1.0);
+        datos.agregar(0.01, 1.0);
+        datos.agregar(0.02, 1.0);
+        datos.setVentanaVisible(10);
+        verificar("Con un nuevo Iniciar todavía sin dibujar, cambiar la ventana deja solo la corrida nueva (3 "
+                        + "puntos) y el eje X de 0 a 10 s",
+                puntos(serie).equals(List.of(new SerieEnVivo.Punto(0.0, 1.0), new SerieEnVivo.Punto(0.01, 1.0),
+                        new SerieEnVivo.Punto(0.02, 1.0)))
+                        && datos.getInicioVentana() == 0.0 && datos.getFinVentana() == 10.0
+                        && !datos.hayPendientes(),
+                "serie " + puntos(serie) + "; " + rango(datos));
+
+        List<SerieEnVivo.Punto> antes = puntos(serie);
+        boolean rechazadas = rechazaVentana(datos, 0) && rechazaVentana(datos, -5)
+                && rechazaVentana(datos, Double.NaN) && rechazaVentana(datos, Double.POSITIVE_INFINITY);
+        verificar("Una ventana de 0 s, negativa, NaN o infinita se rechaza con IllegalArgumentException, y la "
+                        + "ventana y la serie siguen igual",
+                rechazadas && datos.getVentanaVisible() == 10 && puntos(serie).equals(antes),
+                "rechazadas: " + rechazadas + ", ventana " + datos.getVentanaVisible());
+    }
+
+    /**
+     * El eje X de las gráficas reales, eligiendo cada ventana en su selector
+     * como el usuario: sin datos, con datos y después de deslizarse.
+     */
+    private static void verificarEjeConVentana() throws Exception {
+        GraficaDePrueba g = crearGrafica(0);
+        DigitalDePrueba d = crearDigital(0);
+        JComboBox<String> ventanaA = g.panel().getComboVentana();
+        JComboBox<String> ventanaD = d.panel().getComboVentana();
+        enSwing(() -> {
+            controlVisualizacion(g.panel(), g.grafica());
+            controlVisualizacion(d.panel(), d.grafica());
+            return null;
+        });
+
+        StringBuilder sinDatos = new StringBuilder();
+        boolean bienSinDatos = true;
+        for (int i = 0; i < VENTANAS_S.length; i++) {
+            int opcion = i;
+            List<Vista> v = enSwing(() -> {
+                ventanaA.setSelectedIndex(opcion);
+                ventanaD.setSelectedIndex(opcion);
+                return List.of(vista(g), vistaDigital(d));
+            });
+            for (Vista vista : v) {
+                bienSinDatos &= vista.ventana() == VENTANAS_S[i] && vista.inicioX() == 0.0
+                        && vista.finX() == VENTANAS_S[i];
+            }
+            sinDatos.append(v.get(0).rangoX()).append(" y ").append(v.get(1).rangoX()).append("; ");
+        }
+        verificar("Sin datos, al elegir cada ventana (1 s, 5 s, 10 s, 30 s y 1 min) el eje X va de 0 a esa "
+                        + "duración, en las dos gráficas",
+                bienSinDatos, sinDatos.toString());
+
+        // 100 s de datos a 10 ms
+        int hasta = 100 * MUESTRAS_POR_SEGUNDO + 1;
+        enviar(g, 0, hasta);
+        enviarDigital(d, 0, hasta, VerificacionSprint2::patron);
+        boolean dibujo = esperarDibujo(g, 100.0) && esperarDibujoDigital(d, 100.0);
+
+        StringBuilder conDatos = new StringBuilder();
+        boolean bienConDatos = dibujo;
+        for (int i = 0; i < VENTANAS_S.length; i++) {
+            int opcion = i;
+            double ancho = VENTANAS_S[i];
+            double ultimo = tiempo(hasta - 1);
+            List<Vista> elegida = enSwing(() -> {
+                ventanaA.setSelectedIndex(opcion);
+                ventanaD.setSelectedIndex(opcion);
+                return List.of(vista(g), vistaDigital(d));
+            });
+            // Un segundo más: la ventana se desliza
+            enviar(g, hasta, hasta + MUESTRAS_POR_SEGUNDO);
+            enviarDigital(d, hasta, hasta + MUESTRAS_POR_SEGUNDO, VerificacionSprint2::patron);
+            hasta += MUESTRAS_POR_SEGUNDO;
+            double nuevoUltimo = tiempo(hasta - 1);
+            bienConDatos &= esperarDibujo(g, nuevoUltimo) && esperarDibujoDigital(d, nuevoUltimo);
+            List<Vista> deslizada = enSwing(() -> List.of(vista(g), vistaDigital(d)));
+            for (Vista v : elegida) {
+                bienConDatos &= v.inicioX() == ultimo - ancho && v.finX() == ultimo;
+            }
+            for (Vista v : deslizada) {
+                bienConDatos &= v.inicioX() == nuevoUltimo - ancho && v.finX() == nuevoUltimo;
+            }
+            conDatos.append(TEXTOS_VENTANA.get(i)).append(": ").append(elegida.get(0).rangoX()).append(" → ")
+                    .append(deslizada.get(0).rangoX()).append("; ");
+        }
+        verificar("Con datos, el eje X abarca la duración elegida y termina en la última muestra, al elegirla y "
+                        + "después de deslizarse 1 s más, en las dos gráficas (analógica: " + conDatos + ")",
+                bienConDatos, conDatos.toString());
+    }
+
+    /**
+     * Las tres escalas en la gráfica analógica real, eligiéndolas en el
+     * selector. Las muestras ponen el mismo valor en los 8 canales
+     * (muestraConValor()), así se sabe qué se grafica.
+     */
+    private static void verificarEscalas() throws Exception {
+        GraficaDePrueba g = crearGrafica(5);
+        JComboBox<String> escala = g.panel().getComboEscala();
+        JComboBox<String> ventana = g.panel().getComboVentana();
+        enSwing(() -> {
+            controlVisualizacion(g.panel(), g.grafica());
+            return null;
+        });
+
+        List<Vista> fijas = enSwing(() -> {
+            escala.setSelectedIndex(1);
+            Vista tres = vista(g);
+            escala.setSelectedIndex(0);
+            return List.of(tres, vista(g));
+        });
+        verificar("\"0 a 3,3 V\" pone el eje Y de 0 a 3,3 V y \"0 a 5 V\" lo devuelve a 0 a 5 V",
+                fijas.get(0).escala() == EscalaVertical.CERO_A_3_3_V
+                        && cerca(new Range(fijas.get(0).inicioY(), fijas.get(0).finY()), 0.0, 3.3)
+                        && fijas.get(1).escala() == EscalaVertical.CERO_A_5_V
+                        && cerca(new Range(fijas.get(1).inicioY(), fijas.get(1).finY()), 0.0, 5.0),
+                "con 0 a 3,3 V: " + fijas.get(0) + "; con 0 a 5 V: " + fijas.get(1));
+
+        // Automática con una señal plana de 2,5 V
+        enSwing(() -> {
+            escala.setSelectedIndex(2);
+            return null;
+        });
+        int hasta = 5 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarValores(g, 0, hasta, i -> 2.5);
+        boolean dibujo = esperarDibujo(g, tiempo(hasta - 1));
+        Range plana = enSwing(() -> ejeY(g));
+        verificar("\"Automática\" con una señal plana de 2,5 V: aplica el rango mínimo de 0,1 V, centrado: el eje "
+                        + "Y va de 2,45 a 2,55 V",
+                dibujo && cerca(plana, 2.45, 2.55), "eje Y " + plana);
+
+        // Una rampa de 1 a 3 V: 5 % de margen a cada lado
+        int inicioRampa = hasta;
+        hasta += 201;
+        enviarValores(g, inicioRampa, hasta, i -> 1.0 + (i - inicioRampa) / 100.0);
+        dibujo = esperarDibujo(g, tiempo(hasta - 1));
+        Range rampa = enSwing(() -> ejeY(g));
+        verificar("Con valores visibles de 1 a 3 V deja un margen del 5 % del rango a cada lado: el eje Y va de "
+                        + "0,9 a 3,1 V",
+                dibujo && cerca(rampa, 0.9, 3.1), "eje Y " + rampa);
+
+        // Solo cuenta lo visible: con la ventana de 1 s, la rampa de 2 a 3 V
+        Range visible = enSwing(() -> {
+            ventana.setSelectedIndex(0);
+            return ejeY(g);
+        });
+        verificar("Solo cuentan los valores visibles: con la ventana de 1 s se ven de 2 a 3 V y el eje Y pasa a "
+                        + "ir de 1,95 a 3,05 V en el mismo cambio de ventana",
+                Math.abs(visible.getLowerBound() - 1.95) < 0.002 && Math.abs(visible.getUpperBound() - 3.05) < 0.002,
+                "eje Y " + visible);
+
+        // Un ciclo del Timer que cambia el rango: un solo redibujo
+        int[] avisos = {0};
+        enSwing(() -> {
+            g.chart().addChangeListener(e -> avisos[0]++);
+            return null;
+        });
+        int desde = hasta;
+        conSwingOcupado(() -> enviarValores(g, desde, desde + MUESTRAS_POR_CICLO, i -> 4.0));
+        hasta += MUESTRAS_POR_CICLO;
+        dibujo = esperarDibujo(g, tiempo(hasta - 1));
+        esperarCiclosDelTimer();
+        int redibujos = enSwing(() -> avisos[0]);
+        Range subio = enSwing(() -> ejeY(g));
+        verificar("Se recalcula en cada ciclo del Timer sin redibujos adicionales: 5 muestras nuevas de 4 V, "
+                        + "procesadas en un mismo ciclo, llevan el eje Y hasta "
+                        + String.format("%.3f", subio.getUpperBound()) + " V con un solo redibujo (serie y ejes juntos)",
+                dibujo && redibujos == 1 && subio.getUpperBound() > 4.0,
+                "se redibujó " + redibujos + " veces; eje Y " + subio);
+
+        // Casi plana: de 2,00 a 2,04 V, en otra gráfica
+        GraficaDePrueba casiPlana = crearGrafica(0);
+        enSwing(() -> {
+            controlVisualizacion(casiPlana.panel(), casiPlana.grafica());
+            casiPlana.panel().getComboEscala().setSelectedIndex(2);
+            return null;
+        });
+        int n = 2 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarValores(casiPlana, 0, n, i -> i % 2 == 0 ? 2.0 : 2.04);
+        dibujo = esperarDibujo(casiPlana, tiempo(n - 1));
+        Range minima = enSwing(() -> ejeY(casiPlana));
+        verificar("Una señal casi plana (de 2,00 a 2,04 V) no se ve como un ruido enorme: el eje Y mide el mínimo "
+                        + "de 0,1 V, de 1,97 a 2,07 V, y no 0,044 V",
+                dibujo && cerca(minima, 1.97, 2.07), "eje Y " + minima);
+
+        Range cinco = enSwing(() -> {
+            escala.setSelectedIndex(0);
+            return ejeY(g);
+        });
+        verificar("Volver a \"0 a 5 V\" desde la automática fija otra vez el eje Y de 0 a 5 V",
+                cerca(cinco, 0.0, 5.0), "eje Y " + cinco);
+    }
+
+    /**
+     * El punto anterior al borde izquierdo en la analógica, con muestras
+     * cada 10 s y ventana de 5 s.
+     */
+    private static void verificarHuecoIzquierda() throws Exception {
+        SerieEnVivo datos = new SerieEnVivo(5);
+        for (int k = 0; k <= 4; k++) {
+            datos.agregar(10.0 * k, k);
+            datos.procesarPendientes();
+        }
+        List<SerieEnVivo.Punto> a40 = puntos(datos.getSerie());
+        String rango40 = rango(datos);
+        boolean bien40 = a40.equals(List.of(new SerieEnVivo.Punto(30, 3), new SerieEnVivo.Punto(40, 4)))
+                && datos.getInicioVentana() == 35.0 && datos.getFinVentana() == 40.0;
+        verificar("Con 10 s por muestra y ventana de 5 s, la serie conserva el último punto anterior al borde "
+                        + "izquierdo: a los 40 s tiene los de 30 y 40 s con el eje X de 35 a 40 s, así la línea "
+                        + "entra desde el borde (sin ese punto sería un solo punto, sin línea)",
+                bien40, "serie " + a40 + "; " + rango40);
+
+        datos.setVentanaVisible(15);
+        List<SerieEnVivo.Punto> con15 = puntos(datos.getSerie());
+        datos.setVentanaVisible(1);
+        List<SerieEnVivo.Punto> con1 = puntos(datos.getSerie());
+        verificar("... también al cambiar la ventana: con 15 s quedan los de 20, 30 y 40 s, y con 1 s los de 30 "
+                        + "y 40 s",
+                con15.equals(List.of(new SerieEnVivo.Punto(20, 2), new SerieEnVivo.Punto(30, 3),
+                        new SerieEnVivo.Punto(40, 4)))
+                        && con1.equals(List.of(new SerieEnVivo.Punto(30, 3), new SerieEnVivo.Punto(40, 4))),
+                "con 15 s: " + con15 + "; con 1 s: " + con1);
+
+        // En la gráfica real, con la escala automática
+        GraficaDePrueba g = crearGrafica(0);
+        enSwing(() -> {
+            controlVisualizacion(g.panel(), g.grafica());
+            g.panel().getComboVentana().setSelectedIndex(1); // 5 s
+            g.panel().getComboEscala().setSelectedIndex(2); // automática
+            return null;
+        });
+        for (int k = 0; k <= 4; k++) {
+            g.grafica().muestraRecibida(muestraConValor(10.0 * k, k));
+        }
+        boolean dibujo = esperarDibujo(g, 40.0);
+        List<Object> real = enSwing(() -> List.of(puntos(g.serie()), vista(g)));
+        Vista v = (Vista) real.get(1);
+        verificar("En la gráfica real (ventana de 5 s): la serie empieza en el punto de los 30 s, antes del borde "
+                        + "(35 s), y la escala automática usa el valor con que entra la línea (3,5 V), no el del "
+                        + "punto oculto (3 V): eje Y de 3,475 a 4,025 V",
+                dibujo && real.get(0).equals(List.of(new SerieEnVivo.Punto(30, 3), new SerieEnVivo.Punto(40, 4)))
+                        && v.inicioX() == 35.0 && v.finX() == 40.0
+                        && cerca(new Range(v.inicioY(), v.finY()), 3.475, 4.025),
+                "serie " + real.get(0) + "; " + v);
+    }
+
+    /**
+     * El eje X después de un cambio de canal en la gráfica analógica: con el
+     * muestreo detenido (el Muestreador de la prueba nunca corre) y con un
+     * Muestreador real corriendo, rápido y lento.
+     */
+    private static void verificarEjeTrasCambioDeCanal() throws Exception {
+        GraficaDePrueba g = crearGrafica(0);
+        JComboBox<String> ventana = g.panel().getComboVentana();
+        enSwing(() -> {
+            controlVisualizacion(g.panel(), g.grafica());
+            return null;
+        });
+        int hasta = 40 * MUESTRAS_POR_SEGUNDO + 1;
+        enviar(g, 0, hasta);
+        boolean dibujo = esperarDibujo(g, 40.0);
+        List<Vista> cambio = enSwing(() -> {
+            Vista previa = vista(g);
+            g.grafica().cambiarCanal(3);
+            return List.of(previa, vista(g));
+        });
+        esperarCiclosDelTimer();
+        Vista luego = enSwing(() -> vista(g));
+        Vista con5 = enSwing(() -> {
+            ventana.setSelectedIndex(1);
+            return vista(g);
+        });
+        verificar("Con el muestreo detenido, al cambiar de A0 a A3 el eje X pasa de 10–40 s a 0–30 s en el mismo "
+                        + "cambio, sigue así sin muestras nuevas, y al elegir la ventana de 5 s va de 0 a 5 s",
+                dibujo && cambio.get(0).inicioX() == 10.0 && cambio.get(0).finX() == 40.0
+                        && cambio.get(1).inicioX() == 0.0 && cambio.get(1).finX() == 30.0
+                        && luego.inicioX() == 0.0 && luego.finX() == 30.0
+                        && con5.inicioX() == 0.0 && con5.finX() == 5.0,
+                "antes " + cambio.get(0).rangoX() + ", al cambiar " + cambio.get(1).rangoX() + ", 150 ms después "
+                        + luego.rangoX() + ", con 5 s " + con5.rangoX());
+
+        int primera = hasta;
+        enviar(g, primera, primera + 3 * MUESTRAS_POR_SEGUNDO);
+        dibujo = esperarDibujo(g, tiempo(primera + 3 * MUESTRAS_POR_SEGUNDO - 1));
+        Vista conMuestras = enSwing(() -> vista(g));
+        verificar("... y cuando llegan muestras de A3 (desde 40,01 s), el eje X arranca en la primera y abarca 5 s: "
+                        + "va de 40,01 a 45,01 s, como antes de esta tarea",
+                dibujo && conMuestras.inicioX() == tiempo(primera)
+                        && Math.abs(conMuestras.finX() - (tiempo(primera) + 5)) < 1e-9,
+                conMuestras.rangoX());
+
+        // Muestreo corriendo a 10 ms: el eje no debe pasar por 0 un instante
+        FuenteDePrueba fuente = fuenteConectada();
+        Muestreador rapido = new Muestreador(fuente, 10);
+        AtomicInteger llegadas = new AtomicInteger();
+        rapido.agregarOyente(muestra -> llegadas.incrementAndGet());
+        GraficaDePrueba r = enSwing(() -> {
+            PanelSenal panel = new PanelSenal(nombresAnalogicos());
+            GraficaContada grafica = new GraficaContada(rapido, panel, 0);
+            grafica.setVentanaVisible(1);
+            return new GraficaDePrueba(panel, grafica);
+        });
+        List<Range> rangos = java.util.Collections.synchronizedList(new ArrayList<>());
+        rapido.iniciar();
+        boolean corrio = esperarMuestras(llegadas, 250); // unos 2,5 s: el eje X va de 1,5 a 2,5 s
+        Range alCambiar = enSwing(() -> {
+            ValueAxis eje = r.chart().getXYPlot().getDomainAxis();
+            eje.addChangeListener(e -> rangos.add(eje.getRange()));
+            r.grafica().cambiarCanal(3);
+            return eje.getRange();
+        });
+        int enElCambio = llegadas.get();
+        boolean llegaronMas = esperarMuestras(llegadas, enElCambio + 20)
+                && esperarEnSwing(() -> r.serie().getItemCount() >= 20);
+        List<Object> final10 = enSwing(() -> List.of(vista(r), puntos(r.serie())));
+        rapido.detener();
+        List<Range> vistos = List.copyOf(rangos);
+        @SuppressWarnings("unchecked")
+        List<SerieEnVivo.Punto> serie10 = (List<SerieEnVivo.Punto>) final10.get(1);
+        Vista vista10 = (Vista) final10.get(0);
+        boolean nuncaEnCero = vistos.stream().noneMatch(rango -> rango.getLowerBound() == 0.0);
+        verificar(String.format("Con el muestreo corriendo a 10 ms, al cambiar de canal el eje X no pasa por 0 a 1 s: "
+                                + "se queda en %.2f–%.2f s hasta la primera muestra del canal nuevo y arranca en ella "
+                                + "(%d cambios del eje, ninguno en 0)",
+                        alCambiar.getLowerBound(), alCambiar.getUpperBound(), vistos.size()),
+                corrio && llegaronMas && alCambiar.getLowerBound() > 1.0 && nuncaEnCero && !serie10.isEmpty()
+                        && soloVale(valores(serie10), valorCanal(3))
+                        && vista10.inicioX() >= serie10.get(0).tiempo() && !vistos.isEmpty(),
+                "rangos del eje: " + vistos + "; serie desde " + (serie10.isEmpty() ? "-" : serie10.get(0)));
+
+        // Muestreo corriendo a 1000 ms: la próxima muestra tarda casi 1 s
+        Muestreador lento = new Muestreador(fuenteConectada(), 1000);
+        AtomicInteger llegadasLento = new AtomicInteger();
+        lento.agregarOyente(muestra -> llegadasLento.incrementAndGet());
+        GraficaDePrueba l = enSwing(() -> {
+            PanelSenal panel = new PanelSenal(nombresAnalogicos());
+            GraficaContada grafica = new GraficaContada(lento, panel, 0);
+            grafica.setVentanaVisible(1);
+            return new GraficaDePrueba(panel, grafica);
+        });
+        lento.iniciar();
+        // Las muestras llegan a los 0, 1 y 2 s. Se espera a que la tercera
+        // esté dibujada (el eje X va de 1 a 2 s), y enseguida se cambia de
+        // canal, en la misma tarea de Swing en que se revisa.
+        boolean tres = esperarMuestras(llegadasLento, 3)
+                && esperarEnSwing(() -> !l.serie().isEmpty() && l.serie().getMaxX() > 1.5);
+        List<Vista> lentoCambio = enSwing(() -> {
+            Vista previa = vista(l);
+            l.grafica().cambiarCanal(3);
+            return List.of(previa, vista(l));
+        });
+        boolean cuatro = esperarMuestras(llegadasLento, 4) // a los 3 s
+                && esperarEnSwing(() -> !l.serie().isEmpty());
+        List<Object> finalLento = enSwing(() -> List.of(vista(l), puntos(l.serie())));
+        lento.detener();
+        Vista vistaLento = (Vista) finalLento.get(0);
+        @SuppressWarnings("unchecked")
+        List<SerieEnVivo.Punto> serieLento = (List<SerieEnVivo.Punto>) finalLento.get(1);
+        verificar("Con el muestreo corriendo a 1000 ms, al cambiar de canal justo después de una muestra (la "
+                        + "siguiente tarda casi 1 s), el eje X pasa al instante de " + lentoCambio.get(0).rangoX()
+                        + " a 0–1 s (de 0 a la duración de la ventana), y con la primera muestra de A3 arranca en "
+                        + "ella",
+                tres && cuatro && lentoCambio.get(0).inicioX() > 0.9
+                        && lentoCambio.get(1).inicioX() == 0.0 && lentoCambio.get(1).finX() == 1.0
+                        && serieLento.size() == 1 && vistaLento.inicioX() == serieLento.get(0).tiempo()
+                        && vistaLento.inicioX() > 2.5,
+                "antes " + lentoCambio.get(0).rangoX() + ", al cambiar " + lentoCambio.get(1).rangoX()
+                        + ", después " + vistaLento.rangoX() + ", serie " + serieLento);
+    }
+
+    /**
+     * La ventana en la gráfica digital: en SenalesDigitalesEnVivo, con bits
+     * que tienen pulsos de una sola muestra, y en la gráfica real con su
+     * selector.
+     */
+    private static void verificarVentanaDigitalFaseB() throws Exception {
+        Random azar = new Random(21);
+        int total = 45 * MUESTRAS_POR_SEGUNDO + 1;
+        int[] bits = new int[total];
+        for (int i = 1; i < total; i++) {
+            boolean agitado = (i / (5 * MUESTRAS_POR_SEGUNDO)) % 2 == 0;
+            int cambian = agitado ? azar.nextInt(16) : (azar.nextInt(100) < 2 ? 1 << azar.nextInt(4) : 0);
+            bits[i] = bits[i - 1] ^ cambian;
+        }
+        SenalesDigitalesEnVivo datos = new SenalesDigitalesEnVivo(CANALES_DIGITALES, VENTANA_S);
+        alimentarAlAzar(datos, bits, 0, total, azar);
+        List<List<SerieEnVivo.Punto>> historiales = new ArrayList<>();
+        for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+            historiales.add(datos.getHistorial(canal));
+        }
+
+        int errores = 0;
+        int puntosDeMas = 0;
+        boolean historialesIguales = true;
+        StringBuilder detalle = new StringBuilder();
+        double[] anchos = { 10, 60, 1, 5 };
+        for (double ancho : anchos) {
+            datos.setVentanaVisible(ancho);
+            double inicio = datos.getInicioVentana();
+            double ultimo = tiempo(total - 1);
+            if (inicio != Math.max(0.0, ultimo - ancho) || datos.getFinVentana() != inicio + ancho) {
+                errores++;
+            }
+            // Primera muestra dentro de la ventana y la anterior, que da el valor en el borde
+            int primeraVisible = 0;
+            while (tiempo(primeraVisible) < ultimo - ancho) {
+                primeraVisible++;
+            }
+            int primero = Math.max(0, primeraVisible - 1);
+            for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+                XYSeries serie = serieDe(datos, carril);
+                for (int j = primeraVisible; j < total; j++) {
+                    if (valorEn(serie, tiempo(j)) != esperado(bits[j], carril)) {
+                        errores++;
+                    }
+                }
+                int borde = (int) Math.floor(inicio * MUESTRAS_POR_SEGUNDO + 1e-9);
+                if (valorEn(serie, inicio) != esperado(bits[borde], carril)) {
+                    errores++;
+                }
+                int flancos = 0;
+                for (int j = primero + 1; j < total; j++) {
+                    if (esperado(bits[j], carril) != esperado(bits[j - 1], carril)) {
+                        flancos++;
+                    }
+                }
+                boolean finalCambio = esperado(bits[total - 1], carril) != esperado(bits[total - 2], carril);
+                puntosDeMas += Math.abs(serie.getItemCount() - (1 + flancos + (finalCambio ? 0 : 1)));
+            }
+            for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+                historialesIguales &= datos.getHistorial(canal).equals(historiales.get(canal));
+            }
+            detalle.append(ancho).append(" s: Valor con ").append(datos.getSerieValor().getItemCount())
+                    .append(" puntos, ").append(rango(datos)).append("; ");
+        }
+        verificar("En la digital, cambiar la ventana a 10 s, 1 min, 1 s y 5 s reconstruye los 5 carriles sin perder "
+                        + "flancos: la onda pasa por el valor de cada muestra visible (incluidos pulsos de una sola "
+                        + "muestra) y por el del borde izquierdo, y con 1 min reaparecen los 45 s completos",
+                errores == 0, errores + " valores distintos; " + detalle);
+        verificar("... conservando la optimización: cada carril tiene exactamente un punto por flanco, más el del "
+                        + "borde y el final (" + detalle + ")",
+                puntosDeMas == 0, puntosDeMas + " puntos de más o de menos");
+        verificar("... y los historiales de los 4 canales no cambian (4501 muestras cada uno)",
+                historialesIguales, "tamaño de D0: " + datos.getHistorial(0).size());
+
+        // Lecturas pendientes al cambiar la ventana
+        for (int i = total; i < total + 3; i++) {
+            datos.agregar(tiempo(i), 0b0110);
+        }
+        datos.setVentanaVisible(10);
+        boolean pendientesBien = !datos.hayPendientes() && Math.abs(datos.getFinVentana() - tiempo(total + 2)) < 1e-9;
+        for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+            pendientesBien &= valorEn(serieDe(datos, carril), tiempo(total + 2)) == esperado(0b0110, carril);
+        }
+        verificar("Con lecturas recibidas que el Timer aún no dibujaba, cambiar la ventana las dibuja y no deja "
+                        + "pendientes",
+                pendientesBien, rango(datos));
+
+        // La gráfica real con su selector: la escala no aparece
+        DigitalDePrueba d = crearDigital(0);
+        Selectores s = enSwing(() -> {
+            controlVisualizacion(d.panel(), d.grafica());
+            return selectores(d.panel());
+        });
+        verificar("En la pestaña digital, ControlVisualizacion oculta la etiqueta \"Escala:\" y su selector; el de "
+                        + "ventana queda visible con sus 5 opciones",
+                !s.escalaVisible() && !s.etiquetaEscalaVisible() && s.ventanaVisible()
+                        && s.ventanas().equals(TEXTOS_VENTANA),
+                s.toString());
+
+        int hasta = 45 * MUESTRAS_POR_SEGUNDO + 1;
+        enviarDigital(d, 0, hasta, VerificacionSprint2::patron);
+        boolean dibujo = esperarDibujoDigital(d, 45.0);
+        int mal = 0;
+        StringBuilder rangos = new StringBuilder();
+        for (int opcion : new int[] { 1, 4, 0 }) { // 5 s, 1 min y 1 s
+            List<Object> r = enSwing(() -> {
+                d.panel().getComboVentana().setSelectedIndex(opcion);
+                return List.of(vistaDigital(d), dibujadoDistintoPatron(d, hasta));
+            });
+            Vista v = (Vista) r.get(0);
+            mal += (Integer) r.get(1);
+            if (v.inicioX() != Math.max(0, 45.0 - VENTANAS_S[opcion]) || v.finX() != v.inicioX() + VENTANAS_S[opcion]) {
+                mal++;
+            }
+            rangos.append(TEXTOS_VENTANA.get(opcion)).append(": ").append(v.rangoX()).append("; ");
+        }
+        verificar("En la gráfica digital real, elegir 5 s, 1 min y 1 s en el selector mueve el eje X y los 5 "
+                        + "carriles valen lo enviado en cada muestra visible (" + rangos + ")",
+                dibujo && mal == 0, mal + " fallas");
+    }
+
+    /**
+     * Un hilo envía muestras (1 ms entre muestras) a una gráfica analógica y
+     * a una digital reales, mientras el hilo de Swing cambia la ventana de
+     * las dos 1000 veces, al azar. Como en I7LV-16, el otro hilo envía a lo
+     * sumo MUESTRAS_POR_CAMBIO_VENTANA muestras entre dos cambios.
+     *
+     * En cada cambio, en la misma tarea de Swing: la serie analógica es un
+     * tramo seguido del historial (sin repetidos ni huecos), entra desde el
+     * borde izquierdo y el eje X mide la ventana elegida. Cada 20 cambios,
+     * los 5 carriles digitales valen lo enviado en cada muestra visible. Al
+     * final, los historiales están completos y en orden.
+     */
+    private static void verificarVentanaConcurrente() throws Exception {
+        GraficaDePrueba g = crearGrafica(0);
+        DigitalDePrueba d = crearDigital(0);
+        AtomicBoolean enviando = new AtomicBoolean(true);
+        AtomicInteger cambiosHechos = new AtomicInteger();
+        AtomicLong enviadas = new AtomicLong();
+        AtomicReference<Throwable> errorProductor = new AtomicReference<>();
+        Thread productor = new Thread(() -> {
+            long i = 0;
+            int cambiosVistos = 0;
+            int desdeElCambio = 0;
+            while (enviando.get()) {
+                int hechos = cambiosHechos.get();
+                if (hechos != cambiosVistos) {
+                    cambiosVistos = hechos;
+                    desdeElCambio = 0;
+                }
+                if (desdeElCambio < MUESTRAS_POR_CAMBIO_VENTANA) {
+                    Muestra muestra = muestraDigital(tiempoRapido(i), patronRapido(i));
+                    g.grafica().muestraRecibida(muestra);
+                    d.grafica().muestraRecibida(muestra);
+                    i++;
+                    desdeElCambio++;
+                } else {
+                    Thread.onSpinWait();
+                }
+            }
+            enviadas.set(i);
+        }, "Muestreador de prueba");
+        productor.setUncaughtExceptionHandler(guardarEImprimir(errorProductor));
+
+        Random azar = new Random(18);
+        final int cambios = 1000;
+        int incoherencias = 0;
+        int digitalDistinto = 0;
+        int revisionesDigital = 0;
+        long inicio = System.nanoTime();
+        productor.start();
+        for (int k = 0; k < cambios; k++) {
+            double ancho = VENTANAS_S[azar.nextInt(VENTANAS_S.length)];
+            boolean revisarDigital = k % 20 == 0;
+            int[] r = enSwing(() -> {
+                g.grafica().setVentanaVisible(ancho);
+                d.grafica().setVentanaVisible(ancho);
+                cambiosHechos.incrementAndGet(); // el otro hilo puede enviar otra tanda
+                int malDigital = revisarDigital ? digitalDistintoHastaLoDibujado(d) : 0;
+                return new int[] { serieIncoherente(g, ancho), malDigital };
+            });
+            incoherencias += r[0];
+            digitalDistinto += r[1];
+            revisionesDigital += revisarDigital ? 1 : 0;
+            pausar(azar.nextInt(400));
+        }
+        enviando.set(false);
+        productor.join();
+        double segundos = (System.nanoTime() - inicio) / 1e9;
+
+        // Unas muestras más, ya sin cambios, para esperar a que se dibujen
+        long fin = enviadas.get();
+        for (long i = fin; i < fin + 10; i++) {
+            Muestra muestra = muestraDigital(tiempoRapido(i), patronRapido(i));
+            g.grafica().muestraRecibida(muestra);
+            d.grafica().muestraRecibida(muestra);
+        }
+        long totalEnviadas = fin + 10;
+        boolean dibujo = esperarDibujo(g, tiempoRapido(totalEnviadas - 1))
+                && esperarDibujoDigital(d, tiempoRapido(totalEnviadas - 1));
+        List<Object> alFinal = enSwing(() -> List.of(g.grafica().getHistorial(), d.grafica().getHistorial(),
+                serieIncoherente(g, g.grafica().getVentanaVisible()),
+                dibujadoDistinto(d, d.grafica().getHistorial())));
+        @SuppressWarnings("unchecked")
+        List<SerieEnVivo.Punto> historialA = (List<SerieEnVivo.Punto>) alFinal.get(0);
+        @SuppressWarnings("unchecked")
+        List<SerieEnVivo.Punto> historialD = (List<SerieEnVivo.Punto>) alFinal.get(1);
+        int huecos = 0;
+        for (int j = 0; j < historialA.size(); j++) {
+            if (historialA.get(j).tiempo() != tiempoRapido(j)) {
+                huecos++;
+            }
+        }
+        boolean completos = historialA.size() == totalEnviadas && huecos == 0
+                && historialD.size() == totalEnviadas && incoherencias(historialD, 0) == 0;
+
+        verificar(String.format("Cambiar la ventana %d veces mientras otro hilo envía muestras (%,d en %.1f s, a lo "
+                                + "sumo %d por cambio): en cada cambio la serie analógica es un tramo seguido del "
+                                + "historial, sin repetidos ni huecos, que entra desde el borde, con el eje X de la "
+                                + "ventana elegida; y en %d revisiones los 5 carriles digitales valen lo enviado",
+                        cambios, totalEnviadas, segundos, MUESTRAS_POR_CAMBIO_VENTANA, revisionesDigital),
+                errorProductor.get() == null && incoherencias == 0 && digitalDistinto == 0,
+                (errorProductor.get() != null ? "error: " + errorProductor.get() + "; " : "")
+                        + incoherencias + " incoherencias analógicas; " + digitalDistinto + " valores digitales mal");
+        verificar("... y al final los historiales están intactos: completos, en orden y sin huecos (analógico y "
+                        + "digital, " + totalEnviadas + " muestras), y lo dibujado coincide con ellos",
+                dibujo && completos && (Integer) alFinal.get(2) == 0 && (Integer) alFinal.get(3) == 0,
+                "historial analógico " + historialA.size() + " (" + huecos + " fuera de lugar), digital "
+                        + historialD.size() + "; al final: " + alFinal.get(2) + " incoherencias analógicas, "
+                        + alFinal.get(3) + " valores digitales mal");
+    }
+
+    /**
+     * RendererEscalones, que reemplaza a XYStepRenderer en los carriles D0 a
+     * D3, debe verse igual. Se dibuja la gráfica digital real en una imagen
+     * con los dos renderers, con los mismos colores y trazos, y se comparan
+     * los píxeles. Con el suavizado, los bordes de las líneas pueden variar
+     * en unos tonos; lo que no puede haber es un píxel muy distinto (una
+     * línea que falta o que sobra): diferencia de más de 100 en algún color.
+     * - Tramos anchos (D0 cambia cada 0,5 s, con 30 s): se dibujan completos.
+     * - El peor caso (los 4 bits cambian en cada muestra, con 1 min): la
+     *   franja de rayas por columna debe verse como la de XYStepRenderer.
+     */
+    private static void verificarRendererEscalones() throws Exception {
+        IntUnaryOperator lento = i -> ((i / 50) & 1) | (((i / 100) & 1) << 1) | (((i / 200) & 1) << 2) | 0b1000;
+        IntUnaryOperator peor = i -> i % 2 == 0 ? 0b0000 : 0b1111;
+        Object[][] casos = { { "tramos anchos, 30 s", 30.0, 45 * MUESTRAS_POR_SEGUNDO, lento },
+                { "peor caso, 1 min", 60.0, 70 * MUESTRAS_POR_SEGUNDO, peor } };
+        StringBuilder detalle = new StringBuilder();
+        boolean iguales = true;
+        for (Object[] caso : casos) {
+            DigitalDePrueba d = crearDigital(1);
+            double ancho = (Double) caso[1];
+            int hasta = (Integer) caso[2];
+            enSwing(() -> {
+                d.grafica().setVentanaVisible(ancho);
+                return null;
+            });
+            enviarDigital(d, 0, hasta, (IntUnaryOperator) caso[3]);
+            esperarDibujoDigital(d, tiempo(hasta - 1));
+            BufferedImage nuevo = enSwing(() -> dibujarGrafica(d.chart()));
+            BufferedImage conJFreeChart = enSwing(() -> {
+                for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+                    XYItemRenderer nuestro = d.carril(canal).getRenderer();
+                    org.jfree.chart.renderer.xy.XYStepRenderer escalones =
+                            new org.jfree.chart.renderer.xy.XYStepRenderer();
+                    escalones.setSeriesPaint(0, nuestro.getSeriesPaint(0));
+                    escalones.setSeriesStroke(0, nuestro.getSeriesStroke(0));
+                    d.carril(canal).setRenderer(escalones);
+                }
+                return dibujarGrafica(d.chart());
+            });
+            int distintos = 0;
+            int muyDistintos = 0;
+            for (int y = 0; y < nuevo.getHeight(); y++) {
+                for (int x = 0; x < nuevo.getWidth(); x++) {
+                    int a = nuevo.getRGB(x, y);
+                    int b = conJFreeChart.getRGB(x, y);
+                    if (a != b) {
+                        distintos++;
+                        int diferencia = Math.max(Math.abs(((a >> 16) & 0xFF) - ((b >> 16) & 0xFF)),
+                                Math.max(Math.abs(((a >> 8) & 0xFF) - ((b >> 8) & 0xFF)),
+                                        Math.abs((a & 0xFF) - (b & 0xFF))));
+                        if (diferencia > 100) {
+                            muyDistintos++;
+                        }
+                    }
+                }
+            }
+            iguales &= muyDistintos == 0;
+            detalle.append(caso[0]).append(": ").append(distintos).append(" píxeles con otro tono, ")
+                    .append(muyDistintos).append(" muy distintos; ");
+        }
+        verificar("RendererEscalones se ve igual que XYStepRenderer (gráfica de 1000 × 560 px): ningún píxel muy "
+                        + "distinto, ni con tramos anchos ni en el peor caso (" + detalle + ")",
+                iguales, detalle.toString());
+    }
+
+    /** Dibuja la gráfica en una imagen de 1000 × 560 px, como el ChartPanel. Se llama en el hilo de Swing. */
+    private static BufferedImage dibujarGrafica(JFreeChart grafica) {
+        BufferedImage imagen = new BufferedImage(1000, 560, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2 = imagen.createGraphics();
+        grafica.draw(g2, new Rectangle(0, 0, 1000, 560), null, new ChartRenderingInfo());
+        g2.dispose();
+        return imagen;
+    }
+
+    /**
+     * Rendimiento con la ventana de 1 min a 10 ms (6000 puntos a la vista):
+     * cada ciclo del Timer, el cambio de ventana y el dibujo de las gráficas.
+     */
+    private static void verificarRendimientoVentanaMinuto() throws Exception {
+        final int total = 10_000; // 100 s a 10 ms
+        Random azar = new Random(30);
+        int[] alAzar = new int[total];
+        int[] peorCaso = new int[total];
+        int estado = 0;
+        for (int i = 0; i < total; i++) {
+            for (int canal = 0; canal < CANALES_DIGITALES; canal++) {
+                if (azar.nextDouble() < 0.1) {
+                    estado ^= 1 << canal;
+                }
+            }
+            alAzar[i] = estado;
+            peorCaso[i] = i % 2 == 0 ? 0b0000 : 0b1111;
+        }
+
+        // 1) Cada ciclo del Timer: un ciclo cada 5 muestras, como a 10 ms
+        SerieEnVivo analogica = new SerieEnVivo(60);
+        SenalesDigitalesEnVivo digitalAzar = new SenalesDigitalesEnVivo(CANALES_DIGITALES, 60);
+        SenalesDigitalesEnVivo digitalPeor = new SenalesDigitalesEnVivo(CANALES_DIGITALES, 60);
+        double[] promedio = new double[3];
+        double[] peor = new double[3];
+        for (int i = 0; i < total; i++) {
+            analogica.agregar(tiempo(i), valor(i));
+            digitalAzar.agregar(tiempo(i), alAzar[i]);
+            digitalPeor.agregar(tiempo(i), peorCaso[i]);
+            if ((i + 1) % MUESTRAS_POR_CICLO == 0) {
+                Runnable[] ciclos = { analogica::procesarPendientes, digitalAzar::procesarPendientes,
+                        digitalPeor::procesarPendientes };
+                for (int c = 0; c < ciclos.length; c++) {
+                    long t0 = System.nanoTime();
+                    ciclos[c].run();
+                    double ms = (System.nanoTime() - t0) / 1e6;
+                    promedio[c] += ms / (total / MUESTRAS_POR_CICLO);
+                    peor[c] = Math.max(peor[c], ms);
+                }
+            }
+        }
+        verificar(String.format("Ventana de 1 min, 10 000 muestras a 10 ms: cada ciclo del Timer tarda mucho menos "
+                                + "que 50 ms (promedio y peor ciclo: analógica %.3f y %.1f ms, digital al azar %.3f y "
+                                + "%.1f ms, digital en el peor caso %.3f y %.1f ms)",
+                        promedio[0], peor[0], promedio[1], peor[1], promedio[2], peor[2]),
+                promedio[0] < 1.0 && promedio[1] < 1.0 && promedio[2] < 1.0
+                        && peor[0] < 50.0 && peor[1] < 50.0 && peor[2] < 50.0
+                        && puntos(analogica.getSerie()).equals(tramoEsperado(analogica.getHistorial(), 60)),
+                "demasiado lento, o la serie no es el último minuto: tiene " + analogica.getSerie().getItemCount()
+                        + " puntos");
+
+        // 2) Cambiar la ventana con 100 s de datos: la reconstrucción de 1 min es la más cara
+        double peorCambio = 0;
+        for (int k = 0; k < 20; k++) {
+            double ancho = k % 2 == 0 ? 1 : 60;
+            long t0 = System.nanoTime();
+            analogica.setVentanaVisible(ancho);
+            digitalAzar.setVentanaVisible(ancho);
+            digitalPeor.setVentanaVisible(ancho);
+            if (k >= 4) { // los primeros calientan la máquina virtual
+                peorCambio = Math.max(peorCambio, (System.nanoTime() - t0) / 1e6);
+            }
+        }
+        verificar(String.format("Cambiar entre 1 s y 1 min con 100 s de datos reconstruye las tres series (analógica, "
+                        + "digital al azar y en el peor caso) en %.1f ms como mucho, menos que un ciclo de 50 ms",
+                        peorCambio),
+                peorCambio < 50.0, "demasiado lento");
+
+        // 3) Dibujar las gráficas reales con 1 min de datos, como lo hace el ChartPanel
+        GraficaDePrueba g = crearGrafica(0);
+        enSwing(() -> {
+            g.grafica().setVentanaVisible(60);
+            return null;
+        });
+        int hasta = 70 * MUESTRAS_POR_SEGUNDO;
+        enviarValores(g, 0, hasta, VerificacionSprint2::valor);
+        esperarDibujo(g, tiempo(hasta - 1));
+        double analogicaMs = tiempoDeDibujo(g.chart());
+        double[] digitalMs = new double[2];
+        int[][] casos = { alAzar, peorCaso };
+        for (int c = 0; c < casos.length; c++) {
+            DigitalDePrueba d = crearDigital(0);
+            enSwing(() -> {
+                d.grafica().setVentanaVisible(60);
+                return null;
+            });
+            int[] caso = casos[c];
+            enviarDigital(d, 0, hasta, i -> caso[i]);
+            esperarDibujoDigital(d, tiempo(hasta - 1));
+            digitalMs[c] = tiempoDeDibujo(d.chart());
+        }
+        verificar(String.format("Dibujar las gráficas (1000 × 560 px) con 1 min de datos a 10 ms tarda menos que el "
+                                + "ciclo de 50 ms: analógica %.1f ms, digital al azar %.1f ms, digital en el peor caso "
+                                + "%.1f ms (promedios)",
+                        analogicaMs, digitalMs[0], digitalMs[1]),
+                analogicaMs < 50.0 && digitalMs[0] < 50.0 && digitalMs[1] < 50.0, "demasiado lento");
+    }
+
+    // ===================== Utilidades de I7LV-18 fase B =====================
+
+    /**
+     * Lo que muestra una gráfica sobre su ventana y su escala: la duración
+     * de la ventana, el eje X, la escala y el eje Y. En la digital, la escala
+     * es null y el eje Y, NaN.
+     */
+    private record Vista(double ventana, double inicioX, double finX, EscalaVertical escala,
+                         double inicioY, double finY) {
+
+        String rangoX() {
+            return String.format("%.2f–%.2f s", inicioX, finX);
+        }
+    }
+
+    /**
+     * Gráfica de prueba para ControlVisualizacion: no dibuja nada, solo
+     * anota cada cambio que le piden. Solo se usa en el hilo de Swing.
+     */
+    private static final class GraficaDeVistaContada implements VentanaAjustable, EscalaAjustable {
+
+        double ventana = 30;
+        EscalaVertical escala = EscalaVertical.CERO_A_5_V;
+        final List<String> pedidos = new ArrayList<>();
+
+        @Override
+        public double getVentanaVisible() {
+            return ventana;
+        }
+
+        @Override
+        public void setVentanaVisible(double segundos) {
+            pedidos.add("ventana " + segundos);
+            ventana = segundos;
+        }
+
+        @Override
+        public EscalaVertical getEscala() {
+            return escala;
+        }
+
+        @Override
+        public void setEscala(EscalaVertical nueva) {
+            pedidos.add("escala " + nueva);
+            escala = nueva;
+        }
+    }
+
+    /** Lo que muestran los selectores de ventana y escala de una pestaña. */
+    private record Selectores(List<String> ventanas, Object ventanaElegida, List<String> escalas,
+                              Object escalaElegida, boolean ventanaVisible, boolean escalaVisible,
+                              boolean etiquetaEscalaVisible) {
+    }
+
+    /**
+     * Espera a que la condición, revisada en el hilo de Swing, se cumpla.
+     * Espera como mucho 5 s. Sirve cuando las muestras las envía un
+     * Muestreador real: esperar un tiempo fijo a que el Timer dibuje no
+     * alcanza si la máquina virtual se detiene un momento (por ejemplo, para
+     * recolectar basura), y la prueba fallaría sin que la gráfica tenga nada
+     * mal.
+     *
+     * @return true si se cumplió
+     */
+    private static boolean esperarEnSwing(Supplier<Boolean> condicion) throws Exception {
+        long limite = System.nanoTime() + 5_000_000_000L;
+        while (System.nanoTime() < limite) {
+            if (enSwing(condicion)) {
+                return true;
+            }
+            Thread.sleep(10);
+        }
+        return false;
+    }
+
+    /** Conecta, como Main, los selectores de ventana y escala de la pestaña con su gráfica. */
+    private static ControlVisualizacion controlVisualizacion(PanelSenal panel, VentanaAjustable grafica) {
+        return new ControlVisualizacion(panel.getComboVentana(), panel.getLblEscala(),
+                panel.getComboEscala(), grafica);
+    }
+
+    /** Se llama en el hilo de Swing. */
+    private static Vista vista(GraficaDePrueba g) {
+        Range x = g.chart().getXYPlot().getDomainAxis().getRange();
+        Range y = ejeY(g);
+        return new Vista(g.grafica().getVentanaVisible(), x.getLowerBound(), x.getUpperBound(),
+                g.grafica().getEscala(), y.getLowerBound(), y.getUpperBound());
+    }
+
+    /** Se llama en el hilo de Swing. */
+    private static Vista vistaDigital(DigitalDePrueba d) {
+        Range x = d.chart().getXYPlot().getDomainAxis().getRange();
+        return new Vista(d.grafica().getVentanaVisible(), x.getLowerBound(), x.getUpperBound(), null,
+                Double.NaN, Double.NaN);
+    }
+
+    /** Rango del eje Y de la gráfica analógica. Se llama en el hilo de Swing. */
+    private static Range ejeY(GraficaDePrueba g) {
+        return g.chart().getXYPlot().getRangeAxis().getRange();
+    }
+
+    /** Se llama en el hilo de Swing. */
+    private static Selectores selectores(PanelSenal panel) {
+        return new Selectores(opciones(panel.getComboVentana()), panel.getComboVentana().getSelectedItem(),
+                opciones(panel.getComboEscala()), panel.getComboEscala().getSelectedItem(),
+                panel.getComboVentana().isVisible(), panel.getComboEscala().isVisible(),
+                panel.getLblEscala().isVisible());
+    }
+
+    private static List<String> opciones(JComboBox<String> combo) {
+        List<String> opciones = new ArrayList<>();
+        for (int i = 0; i < combo.getItemCount(); i++) {
+            opciones.add(combo.getItemAt(i));
+        }
+        return opciones;
+    }
+
+    /** Si el rango va de esos límites, salvo el redondeo de los decimales. */
+    private static boolean cerca(Range rango, double inferior, double superior) {
+        return Math.abs(rango.getLowerBound() - inferior) < 1e-9 && Math.abs(rango.getUpperBound() - superior) < 1e-9;
+    }
+
+    /** Muestra sintética con el mismo valor en los 8 canales analógicos. */
+    private static Muestra muestraConValor(double tiempo, double valor) {
+        double[] analogicas = new double[CANALES];
+        Arrays.fill(analogicas, valor);
+        return new Muestra(tiempo, analogicas, DIGITALES);
+    }
+
+    /** Envía las muestras desde (incluida) hasta (excluida), con ese valor en todos los canales. */
+    private static void enviarValores(GraficaDePrueba g, int desde, int hasta, IntToDoubleFunction valor) {
+        for (int i = desde; i < hasta; i++) {
+            g.grafica().muestraRecibida(muestraConValor(tiempo(i), valor.applyAsDouble(i)));
+        }
+    }
+
+    private static String[] nombresAnalogicos() {
+        String[] nombres = new String[CANALES];
+        for (int i = 0; i < CANALES; i++) {
+            nombres[i] = "A" + i;
+        }
+        return nombres;
+    }
+
+    /** Intenta poner esa ventana y dice si se rechazó con IllegalArgumentException. */
+    private static boolean rechazaVentana(SerieEnVivo datos, double segundos) {
+        try {
+            datos.setVentanaVisible(segundos);
+            return false;
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
+    }
+
+    /**
+     * La serie que debe dibujar la analógica con una ventana de esa duración,
+     * según su regla: los puntos del historial desde el borde izquierdo, más
+     * el anterior si ninguno cae justo en el borde.
+     */
+    private static List<SerieEnVivo.Punto> tramoEsperado(List<SerieEnVivo.Punto> historial, double ancho) {
+        double limite = historial.get(historial.size() - 1).tiempo() - ancho;
+        int primero = 0;
+        while (historial.get(primero).tiempo() < limite) {
+            primero++;
+        }
+        if (primero > 0 && historial.get(primero).tiempo() > limite) {
+            primero--;
+        }
+        return historial.subList(primero, historial.size());
+    }
+
+    /**
+     * Cuántas incoherencias hay entre la serie analógica dibujada y su
+     * historial en la prueba de concurrencia: la serie debe ser un tramo
+     * seguido del historial (mismos puntos, en orden, sin repetidos ni
+     * huecos), debe empezar en el borde izquierdo o antes (salvo que empiece
+     * en el primer punto del historial), y el eje X debe medir la ventana.
+     * Se llama en el hilo de Swing.
+     */
+    private static int serieIncoherente(GraficaDePrueba g, double ancho) {
+        List<SerieEnVivo.Punto> historial = g.grafica().getHistorial();
+        List<SerieEnVivo.Punto> dibujados = puntos(g.serie());
+        Range ejeX = g.chart().getXYPlot().getDomainAxis().getRange();
+        int mal = Math.abs(ejeX.getLength() - ancho) < 1e-9 ? 0 : 1;
+        if (dibujados.isEmpty()) {
+            return mal;
+        }
+        // Posición del primer punto dibujado en el historial: el punto j tiene el tiempo j ms
+        int inicio = (int) Math.round(dibujados.get(0).tiempo() * 1000);
+        for (int k = 0; k < dibujados.size(); k++) {
+            if (inicio + k >= historial.size() || !historial.get(inicio + k).equals(dibujados.get(k))) {
+                mal++;
+            }
+        }
+        if (dibujados.get(0).tiempo() > ejeX.getLowerBound() && inicio > 0) {
+            mal++; // hueco a la izquierda
+        }
+        return mal;
+    }
+
+    /**
+     * Cuántos valores dibujados en la gráfica digital real no son los de
+     * patron(): en el tiempo de cada muestra de las primeras "cantidad" que
+     * cae en la ventana visible, cada carril debe valer lo que traía esa
+     * muestra. Se llama en el hilo de Swing.
+     */
+    private static int dibujadoDistintoPatron(DigitalDePrueba d, int cantidad) {
+        double inicioEje = d.chart().getXYPlot().getDomainAxis().getLowerBound();
+        int mal = 0;
+        for (int j = 0; j < cantidad; j++) {
+            if (tiempo(j) >= inicioEje) {
+                for (int carril = 0; carril <= CARRIL_VALOR; carril++) {
+                    if (valorEn(d.serie(carril), tiempo(j)) != esperado(patron(j), carril)) {
+                        mal++;
+                    }
+                }
+            }
+        }
+        return mal;
+    }
+
+    /**
+     * Como dibujadoDistinto(), pero solo hasta la última lectura ya dibujada:
+     * en plena prueba de concurrencia, el historial puede traer lecturas que
+     * llegaron después y que el Timer todavía no dibuja. Se llama en el hilo
+     * de Swing.
+     */
+    private static int digitalDistintoHastaLoDibujado(DigitalDePrueba d) {
+        XYSeries valor = d.serie(CARRIL_VALOR);
+        if (valor.isEmpty()) {
+            return 0;
+        }
+        double ultimoDibujado = valor.getX(valor.getItemCount() - 1).doubleValue();
+        List<SerieEnVivo.Punto> dibujables = new ArrayList<>();
+        for (SerieEnVivo.Punto p : d.grafica().getHistorial()) {
+            if (p.tiempo() <= ultimoDibujado) {
+                dibujables.add(p);
+            }
+        }
+        return dibujadoDistinto(d, dibujables);
+    }
+
+    /**
+     * Tiempo promedio de dibujar la gráfica en una imagen de 1000 × 560 px,
+     * como lo hace el ChartPanel (con la información de entidades), en el
+     * hilo de Swing. Los 5 primeros dibujos calientan la máquina virtual y no
+     * cuentan.
+     */
+    private static double tiempoDeDibujo(JFreeChart grafica) throws Exception {
+        BufferedImage imagen = new BufferedImage(1000, 560, BufferedImage.TYPE_INT_RGB);
+        double promedioMs = 0;
+        for (int k = 0; k < 25; k++) {
+            long t0 = System.nanoTime();
+            enSwing(() -> {
+                Graphics2D g2 = imagen.createGraphics();
+                grafica.draw(g2, new Rectangle(0, 0, 1000, 560), null, new ChartRenderingInfo());
+                g2.dispose();
+                return null;
+            });
+            if (k >= 5) {
+                promedioMs += (System.nanoTime() - t0) / 1e6 / 20;
+            }
+        }
+        return promedioMs;
     }
 
     // ===================== Utilidades =====================

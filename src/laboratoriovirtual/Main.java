@@ -4,9 +4,14 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import laboratoriovirtual.control.CarpetaRecordada;
+import laboratoriovirtual.control.ControlGuardado;
 import laboratoriovirtual.control.ControlMuestreo;
 import laboratoriovirtual.control.ControlSalidas;
 import laboratoriovirtual.control.ControlSeleccion;
+import laboratoriovirtual.control.ControlVisualizacion;
+import laboratoriovirtual.control.DialogosGuardado;
+import laboratoriovirtual.control.DialogosGuardadoSwing;
 import laboratoriovirtual.control.GraficaAnalogica;
 import laboratoriovirtual.control.GraficaDigital;
 import laboratoriovirtual.datos.FuenteAleatoria;
@@ -51,7 +56,6 @@ public class Main {
             boolean conectada = errorAlConectar == null;
 
             // Controladores: cada uno maneja una parte de la ventana.
-            // En una tarea siguiente se agrega aquí ControlGuardado.
             ControlMuestreo controlMuestreo = new ControlMuestreo(muestreador,
                     ventana.getBarraEstado(), ventana.getPanelMuestreo(), ventana);
             ControlSalidas controlSalidas = new ControlSalidas(fuente,
@@ -66,23 +70,41 @@ public class Main {
 
             // Gráfica en vivo de la pestaña "Señal analógica". Arranca en el
             // canal 0 (A0) y el selector de la pestaña la cambia de canal.
-            // Queda en una variable porque el guardado de la señal
-            // (Sprint 3) la necesitará.
+            // Los selectores "Ventana:" y "Escala:" cambian cuánto tiempo se
+            // ve y el rango del eje Y.
             GraficaAnalogica graficaAnalogica = new GraficaAnalogica(
                     muestreador, ventana.getPanelAnalogica(), 0);
             new ControlSeleccion(ventana.getPanelAnalogica().getComboCanal(),
                     graficaAnalogica);
+            new ControlVisualizacion(ventana.getPanelAnalogica().getComboVentana(),
+                    ventana.getPanelAnalogica().getLblEscala(),
+                    ventana.getPanelAnalogica().getComboEscala(), graficaAnalogica);
 
             // Gráfica en vivo de la pestaña "Señal digital": diagrama de
             // tiempos con D0 a D3 y el valor en hexadecimal. Arranca con D0
             // seleccionada y el selector de la pestaña elige cuál se
-            // resalta, sin borrar nada. Queda en una variable porque el
-            // guardado de la señal (Sprint 3) la necesitará: guarda la
-            // señal seleccionada.
+            // resalta, sin borrar nada. El selector "Ventana:" cambia cuánto
+            // tiempo se ve; el de escala queda oculto, porque cada carril va
+            // siempre de 0 a 1.
             GraficaDigital graficaDigital = new GraficaDigital(
                     muestreador, ventana.getPanelDigital(), 0);
             new ControlSeleccion(ventana.getPanelDigital().getComboCanal(),
                     graficaDigital);
+            new ControlVisualizacion(ventana.getPanelDigital().getComboVentana(),
+                    ventana.getPanelDigital().getLblEscala(),
+                    ventana.getPanelDigital().getComboEscala(), graficaDigital);
+
+            // Botón "Guardar esta señal…" de cada pestaña: guarda en un
+            // archivo la señal seleccionada (en la digital, la resaltada).
+            // Las dos pestañas comparten la carpeta recordada: la ventana de
+            // guardar abre donde se guardó la última vez, en cualquiera de
+            // ellas. Empieza en Documentos y no se guarda al cerrar.
+            CarpetaRecordada carpetaGuardado = new CarpetaRecordada();
+            DialogosGuardado dialogosGuardado = new DialogosGuardadoSwing(ventana);
+            new ControlGuardado(ventana.getPanelAnalogica().getBtnGuardar(),
+                    graficaAnalogica, carpetaGuardado, dialogosGuardado);
+            new ControlGuardado(ventana.getPanelDigital().getBtnGuardar(),
+                    graficaDigital, carpetaGuardado, dialogosGuardado);
 
             // Al cerrar la ventana: primero se detiene el muestreo, para que
             // no lea una fuente desconectada, y luego se desconecta la fuente.

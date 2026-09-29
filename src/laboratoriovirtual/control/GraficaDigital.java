@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.swing.JComboBox;
 import javax.swing.Timer;
+import laboratoriovirtual.almacenamiento.HistorialSenal;
 import laboratoriovirtual.datos.FuenteDeDatos;
 import laboratoriovirtual.gui.PanelSenal;
 import laboratoriovirtual.gui.Tema;
@@ -18,7 +19,6 @@ import org.jfree.chart.axis.ValueAxis;
 import org.jfree.chart.plot.CombinedDomainXYPlot;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYItemRenderer;
-import org.jfree.chart.renderer.xy.XYStepRenderer;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
@@ -32,14 +32,16 @@ import org.jfree.data.xy.XYSeriesCollection;
  * los bits es correcto y cómo afecta la frecuencia de muestreo a los flancos.
  *
  * Cinco carriles apilados que comparten el eje X "Tiempo (s)", de arriba abajo:
- * - D0, D1, D2 y D3: onda cuadrada en escalones, 0 abajo y 1 arriba. La señal
+ * - D0, D1, D2 y D3: onda cuadrada en escalones, 0 abajo y 1 arriba
+ *   (RendererEscalones, desde I7LV-18; antes XYStepRenderer). La señal
  *   seleccionada va en rojo y con trazo más grueso; las demás, en gris oscuro.
  *   El nombre del carril, a la izquierda, va en rojo en la seleccionada y en
  *   negro en las demás (I7LV-19).
  * - Valor: los 4 bits combinados como un dígito hexadecimal, estilo bus
  *   (RendererBus). D3 es el bit más significativo: D3 = 1, D2 = 0, D1 = 1 y
  *   D0 = 0 es "A".
- * La ventana de 30 s es la misma de la gráfica analógica, y el título dice
+ * La ventana visible (30 s al comenzar) funciona igual que en la gráfica
+ * analógica y se cambia con setVentanaVisible() (I7LV-18). El título dice
  * cuál es la señal seleccionada ("Seleccionada: D0"). La elige el selector
  * de la pestaña, conectado en Main con ControlSeleccion (I7LV-19).
  *
@@ -47,10 +49,14 @@ import org.jfree.data.xy.XYSeriesCollection;
  * cambio de canal vacía la gráfica y el historial. Aquí se registran siempre
  * los cuatro canales y cambiar la selección solo cambia el resaltado. Heredar
  * obligaría a anular la mitad de la clase base. Se reutilizan sus piezas:
- * la ventana de 30 s y el periodo del Timer (sus constantes), el tipo de
- * punto del historial (SerieEnVivo.Punto), el estilo y el ChartPanel sin
- * zoom (EstiloGrafica) y la interfaz CanalSeleccionable, con la que
- * ControlSeleccion la conecta con el selector de la pestaña (I7LV-19).
+ * la duración inicial de la ventana y el periodo del Timer (sus
+ * constantes), el tipo de punto del historial (SerieEnVivo.Punto), el
+ * estilo y el ChartPanel sin zoom (EstiloGrafica) y las interfaces
+ * CanalSeleccionable y VentanaAjustable, con las que ControlSeleccion
+ * (I7LV-19) y ControlVisualizacion (I7LV-18) la conectan con los selectores
+ * de la pestaña. También implementa SenalGuardable, como la analógica:
+ * getHistorialParaGuardar() entrega la señal seleccionada para guardarla en
+ * un archivo (Sprint 3).
  *
  * Hilos: el mismo esquema de GraficaSenal.
  * - muestraRecibida() llega desde el hilo del Muestreador. Combina los bits
@@ -66,7 +72,8 @@ import org.jfree.data.xy.XYSeriesCollection;
  * Es final: así se registra como oyente al final del constructor sin que una
  * subclase pueda quedar a medio construir cuando llegue la primera muestra.
  */
-public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable {
+public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable, VentanaAjustable,
+        SenalGuardable {
 
     /** Cantidad de señales digitales: los bits de cada lectura. */
     private static final int CANALES = FuenteDeDatos.NUM_DIGITALES_ENTRADA;
@@ -92,7 +99,7 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
     private final List<String> nombresCanales;
 
     private final SenalesDigitalesEnVivo datos =
-            new SenalesDigitalesEnVivo(CANALES, GraficaSenal.VENTANA_VISIBLE_S);
+            new SenalesDigitalesEnVivo(CANALES, GraficaSenal.VENTANA_POR_DEFECTO_S);
     private final NumberAxis ejeTiempo;
 
     // Renderer de cada carril de señal, para cambiar su color y su trazo
@@ -138,14 +145,14 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
 
         ejeTiempo = new NumberAxis("Tiempo (s)");
         // Rango fijo que refrescar() mueve a mano. Al comenzar va de 0 a 30 s.
-        ejeTiempo.setRange(0.0, GraficaSenal.VENTANA_VISIBLE_S);
+        ejeTiempo.setRange(0.0, GraficaSenal.VENTANA_POR_DEFECTO_S);
         EstiloGrafica.aplicarAEje(ejeTiempo);
 
         // Un XYPlot por carril, apilados sobre el mismo eje X
         CombinedDomainXYPlot areaDibujo = new CombinedDomainXYPlot(ejeTiempo);
         areaDibujo.setGap(ESPACIO_ENTRE_CARRILES);
         for (int i = 0; i < CANALES; i++) {
-            escalones[i] = new XYStepRenderer();
+            escalones[i] = new RendererEscalones();
             XYPlot carril = crearCarril(nombresCanales.get(i), datos.getSerieCanal(i), escalones[i]);
             ejesCarriles[i] = carril.getRangeAxis();
             resaltar(i, i == canal);
@@ -169,24 +176,70 @@ public final class GraficaDigital implements OyenteMuestras, CanalSeleccionable 
         return canal;
     }
 
+    /** Duración de la ventana visible, en segundos. Se llama en el hilo de Swing. */
+    @Override
+    public double getVentanaVisible() {
+        return datos.getVentanaVisible();
+    }
+
+    /**
+     * Cambia la duración de la ventana visible (I7LV-18): los cinco carriles
+     * se reconstruyen desde el historial (ver
+     * SenalesDigitalesEnVivo.setVentanaVisible()) y el eje X se ajusta, todo
+     * en un solo redibujo. No cambia la selección. Pedir la duración que ya
+     * tiene no hace nada. Se llama desde el hilo de Swing.
+     */
+    @Override
+    public void setVentanaVisible(double segundos) {
+        if (segundos == datos.getVentanaVisible()) {
+            return;
+        }
+        grafica.setNotify(false);
+        try {
+            datos.setVentanaVisible(segundos); // valida antes de tocar nada
+            ejeTiempo.setRange(datos.getInicioVentana(), datos.getFinVentana());
+        } finally {
+            grafica.setNotify(true);
+        }
+    }
+
     /**
      * Copia inmutable del historial de la señal seleccionada: un punto
      * (tiempo, 0 o 1) por cada muestra desde el último Iniciar, aunque ya no
-     * se dibuje. Pensado para guardar la señal en un archivo (Sprint 3).
+     * se dibuje. Para guardar la señal en un archivo está
+     * getHistorialParaGuardar(), que entrega además el nombre del canal,
+     * tomado junto con la copia.
      *
-     * Se llama desde el hilo de Swing (por ejemplo, desde el botón "Guardar
-     * esta señal…"), en la misma tarea en que se lea getCanal() para saber de
-     * qué canal es. Es la regla de I7LV-16: la selección solo cambia en el
-     * hilo de Swing, así que entre las dos llamadas no puede cambiar y el
-     * historial es del canal que dijo getCanal(). Desde otro hilo la copia
-     * sale igual completa y de un solo canal, pero la selección podría
-     * cambiar entre una llamada y otra.
+     * Se llama desde el hilo de Swing, en la misma tarea en que se lea
+     * getCanal() para saber de qué canal es. Es la regla de I7LV-16: la
+     * selección solo cambia en el hilo de Swing, así que entre las dos
+     * llamadas no puede cambiar y el historial es del canal que dijo
+     * getCanal(). Desde otro hilo la copia sale igual completa y de un solo
+     * canal, pero la selección podría cambiar entre una llamada y otra.
      *
      * Cambiar la selección no borra nada: los cuatro canales se registran
      * siempre, cada uno con su historial completo.
      */
     public List<SerieEnVivo.Punto> getHistorial() {
         return datos.getHistorial(canal);
+    }
+
+    /**
+     * La señal seleccionada (por ejemplo "D2") y la copia de su historial,
+     * con 0 y 1, tomados juntos, listos para EscritorArchivo. Se llama desde
+     * el hilo de Swing, al pulsar "Guardar esta señal…" (ver SenalGuardable).
+     *
+     * La selección se lee una sola vez y de ella salen el nombre y el
+     * historial: los dos son siempre del mismo canal, aunque la selección
+     * cambie en ese mismo momento. No hace falta el candado para eso, porque
+     * cambiar la selección no toca los historiales; la copia sí se toma con
+     * el candado de SenalesDigitalesEnVivo (ver getHistorial(canal)).
+     */
+    @Override
+    public HistorialSenal getHistorialParaGuardar() {
+        int elegido = canal;
+        return GraficaSenal.aHistorialSenal(nombresCanales.get(elegido), HistorialSenal.Tipo.DIGITAL,
+                datos.getHistorial(elegido));
     }
 
     // ===================== Avisos del Muestreador =====================

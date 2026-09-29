@@ -34,17 +34,23 @@ import org.jfree.data.xy.XYSeries;
  * serie queda mucho más corta (una señal fija durante 30 s a 10 ms son 2
  * puntos, no 3000).
  *
+ * Ventana visible (I7LV-18): su duración empieza en la que recibe el
+ * constructor y se cambia con setVentanaVisible(), que reconstruye las
+ * series desde el historial con la misma regla de solo guardar los cambios.
+ *
  * Reparto de hilos: el mismo de SerieEnVivo.
  * - agregar() lo llama el hilo del Muestreador. Guarda la lectura en el
  *   historial y en la cola; no toca las series.
- * - procesarPendientes(), getSerieCanal(), getSerieValor(),
- *   getInicioVentana() y getFinVentana() se usan solo desde el hilo de Swing
- *   (en el programa, desde el Timer de GraficaDigital). JFreeChart lee las
- *   series al dibujar, también en ese hilo.
+ * - procesarPendientes(), setVentanaVisible(), getSerieCanal(),
+ *   getSerieValor(), getVentanaVisible(), getInicioVentana() y
+ *   getFinVentana() se usan solo desde el hilo de Swing (en el programa,
+ *   desde el Timer de GraficaDigital y el cambio de ventana). JFreeChart lee
+ *   las series al dibujar, también en ese hilo.
  * - hayPendientes() y getHistorial() se pueden llamar desde cualquier hilo.
  *
- * Candado: el propio objeto. agregar() es synchronized y getHistorial() copia
- * el historial con ese mismo candado.
+ * Candado: el propio objeto. agregar() es synchronized, getHistorial() copia
+ * el historial con ese mismo candado, y setVentanaVisible() lo toma para
+ * vaciar la cola y copiar el tramo que necesita en un solo paso.
  */
 public class SenalesDigitalesEnVivo {
 
@@ -62,8 +68,8 @@ public class SenalesDigitalesEnVivo {
     /** Cantidad de canales: los bits que se usan de cada lectura. */
     private final int canales;
 
-    /** Ancho de la ventana visible, en segundos. */
-    private final double anchoVentana;
+    // Duración de la ventana visible, en segundos. Solo hilo de Swing.
+    private double anchoVentana;
 
     // Lecturas recibidas que las series todavía no tienen. Como en
     // SerieEnVivo: el hilo de Swing saca sin tomar el candado mientras el
@@ -85,12 +91,15 @@ public class SenalesDigitalesEnVivo {
 
     /**
      * @param canales       cantidad de canales digitales (de 1 a 30)
-     * @param anchoVentanaS ancho de la ventana visible, en segundos
+     * @param anchoVentanaS duración inicial de la ventana visible, en segundos
+     * @throws IllegalArgumentException si la cantidad de canales o la
+     *                                  duración no son válidas
      */
     public SenalesDigitalesEnVivo(int canales, double anchoVentanaS) {
         if (canales < 1 || canales > 30) {
             throw new IllegalArgumentException("Cantidad de canales no válida: " + canales);
         }
+        validarAncho(anchoVentanaS);
         this.canales = canales;
         this.anchoVentana = anchoVentanaS;
         carrilesCanal = new Carril[canales];
@@ -210,6 +219,61 @@ public class SenalesDigitalesEnVivo {
         }
     }
 
+    /**
+     * Cambia la duración de la ventana visible (I7LV-18) y reconstruye las
+     * series desde el historial: al agrandarla reaparecen las lecturas que ya
+     * habían salido; al achicarla, se recorta. El historial no cambia. Cada
+     * serie avisa una sola vez. Pedir la duración que ya tiene no hace nada.
+     *
+     * Como en SerieEnVivo.setVentanaVisible(): con el candado, en un solo
+     * paso, se vacía la cola y se copia del historial solo el tramo que se ve
+     * con la ventana nueva, empezando por la última lectura anterior al borde
+     * izquierdo (da el valor de cada carril en el borde). Toda lectura
+     * recibida queda en la copia o en la cola, nunca en las dos ni en
+     * ninguna. Las lecturas de la cola que quedaron fuera de la copia son de
+     * una corrida anterior a un nuevo Iniciar: ya no están en el historial y
+     * no se dibujan. Las series se rearman con las mismas reglas de siempre:
+     * solo los cambios, el punto final y el último cambio anterior al borde.
+     *
+     * @param segundos nueva duración, mayor que cero
+     * @throws IllegalArgumentException si no es un número mayor que cero
+     */
+    public void setVentanaVisible(double segundos) {
+        validarAncho(segundos);
+        if (segundos == anchoVentana) {
+            return;
+        }
+        List<Lectura> tramo;
+        synchronized (this) {
+            pendientes.clear();
+            tramo = tramoVisible(segundos);
+        }
+        anchoVentana = segundos;
+        for (Carril carril : todos) {
+            carril.empezarCiclo();
+            carril.vaciar();
+        }
+        try {
+            for (Lectura lectura : tramo) {
+                for (int i = 0; i < canales; i++) {
+                    carrilesCanal[i].agregar(lectura.tiempo(), estado(lectura.bits(), i));
+                }
+                carrilValor.agregar(lectura.tiempo(), lectura.bits());
+            }
+            if (!tramo.isEmpty()) {
+                ultimoTiempoDibujado = tramo.get(tramo.size() - 1).tiempo();
+            }
+            double inicioVentana = ultimoTiempoDibujado - anchoVentana;
+            for (Carril carril : todos) {
+                carril.terminarCiclo(inicioVentana);
+            }
+        } finally {
+            for (Carril carril : todos) {
+                carril.serie.setNotify(true);
+            }
+        }
+    }
+
     /** Serie que dibuja el carril de un canal: 0 y 1, solo los cambios y el último punto. */
     public XYSeries getSerieCanal(int canal) {
         return carrilesCanal[canal].serie;
@@ -220,22 +284,61 @@ public class SenalesDigitalesEnVivo {
         return carrilValor.serie;
     }
 
+    /** Duración de la ventana visible, en segundos. */
+    public double getVentanaVisible() {
+        return anchoVentana;
+    }
+
     /**
-     * Inicio de la ventana visible, en segundos: 0 mientras no se llenan los
-     * 30 s (al comenzar y con cada nuevo Iniciar), y después, 30 s antes de
-     * la última lectura dibujada. Es la misma ventana de la gráfica
-     * analógica.
+     * Inicio de la ventana visible, en segundos: 0 mientras no se llena la
+     * ventana (al comenzar y con cada nuevo Iniciar), y después, la duración
+     * de la ventana antes de la última lectura dibujada. Es la misma regla de
+     * la gráfica analógica.
      */
     public double getInicioVentana() {
         return Math.max(0.0, ultimoTiempoDibujado - anchoVentana);
     }
 
-    /** Fin de la ventana visible, en segundos: siempre 30 s después del inicio. */
+    /** Fin de la ventana visible, en segundos: siempre su duración después del inicio. */
     public double getFinVentana() {
         return getInicioVentana() + anchoVentana;
     }
 
     // ===================== Utilidades =====================
+
+    /**
+     * Copia del tramo del historial que se ve con una ventana de esa
+     * duración: las lecturas desde el borde izquierdo hasta la última, más
+     * la anterior al borde, si la hay. Se llama con el candado, y solo copia
+     * ese tramo: el Muestreador espera mientras tanto.
+     */
+    private List<Lectura> tramoVisible(double ancho) {
+        int n = historial.size();
+        if (n == 0) {
+            return List.of();
+        }
+        double limite = historial.get(n - 1).tiempo() - ancho;
+        // Búsqueda binaria de la primera lectura con tiempo >= limite: el
+        // historial está en orden de tiempo (un tiempo menor lo vacía)
+        int bajo = 0;
+        int alto = n - 1;
+        while (bajo < alto) {
+            int medio = (bajo + alto) >>> 1;
+            if (historial.get(medio).tiempo() < limite) {
+                bajo = medio + 1;
+            } else {
+                alto = medio;
+            }
+        }
+        int primero = Math.max(0, bajo - 1); // con la anterior al borde
+        return new ArrayList<>(historial.subList(primero, n));
+    }
+
+    private static void validarAncho(double segundos) {
+        if (!(segundos > 0) || Double.isInfinite(segundos)) {
+            throw new IllegalArgumentException("La ventana visible debe durar más de 0 s: " + segundos);
+        }
+    }
 
     /** Estado de un canal dentro de los bits de una lectura: 1.0 o 0.0. */
     private static double estado(int bits, int canal) {
@@ -309,9 +412,10 @@ public class SenalesDigitalesEnVivo {
         /**
          * Quita los puntos anteriores al inicio de la ventana, menos el
          * último de ellos: ese dice qué valor tiene la señal en el borde
-         * izquierdo. Sin él, una señal que no cambia desde hace más de 30 s
-         * se quedaría sin línea. El punto que queda fuera de la ventana no se
-         * ve: JFreeChart recorta el dibujo al área de la gráfica.
+         * izquierdo. Sin él, una señal que no cambia desde hace más que la
+         * duración de la ventana se quedaría sin línea. El punto que queda
+         * fuera de la ventana no se ve: JFreeChart recorta el dibujo al área
+         * de la gráfica.
          */
         private void quitarPuntosViejos(double inicioVentana) {
             int viejos = 0;
